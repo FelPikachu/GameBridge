@@ -20,6 +20,7 @@ if os.fspath(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, os.fspath(PLUGIN_ROOT))
 
 from gamebridge.compatibility import CompatibilityManager  # noqa: E402, I001
+from gamebridge.cloud_saves import EpicCloudSaveManager  # noqa: E402, I001
 from gamebridge.play_history import merge_history_store  # noqa: E402, I001
 from gamebridge.providers.hoyoplay import (  # noqa: E402, I001
     HOYOPLAY_GLOBAL,
@@ -709,6 +710,21 @@ def main() -> int:
     modifier_environment, wrapper = _launch_modifiers(arguments.launch_modifiers)
     environment.update(modifier_environment)
     wrapper = _compose_game_wrapper(arguments.game_wrapper, wrapper, user_home)
+    cloud_saves = EpicCloudSaveManager(root_data)
+    try:
+        cloud_before = cloud_saves.sync_before_launch(arguments.game_id)
+        _write_log(
+            root_data / "compatibility" / "logs",
+            f"cloud download {arguments.game_id} {cloud_before.state}",
+        )
+    except Exception as exc:
+        # Cloud availability must never prevent an owned local game from
+        # launching. Persist only the normalized exception class, not CLI
+        # output, paths, account ids, or authentication material.
+        _write_log(
+            root_data / "compatibility" / "logs",
+            f"cloud download {arguments.game_id} failed {type(exc).__name__}",
+        )
     _write_log(
         root_data / "compatibility" / "logs",
         f"launch {arguments.game_id} appid={steam_app_id} with {runtime_name} "
@@ -760,6 +776,17 @@ def main() -> int:
         env=environment,
         check=False,
     )
+    try:
+        cloud_after = cloud_saves.sync_after_exit(arguments.game_id)
+        _write_log(
+            root_data / "compatibility" / "logs",
+            f"cloud upload {arguments.game_id} {cloud_after.state}",
+        )
+    except Exception as exc:
+        _write_log(
+            root_data / "compatibility" / "logs",
+            f"cloud upload {arguments.game_id} failed {type(exc).__name__}",
+        )
     _record_last_played(root_data, "epic", arguments.game_id)
     _write_log(root_data / "compatibility" / "logs", f"exit {result.returncode}")
     return result.returncode

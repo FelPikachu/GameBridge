@@ -148,6 +148,16 @@ type ArtworkSettings = { steamGridDbConfigured: boolean; steamGridDbLastValidati
 const getArtworkSettings = callable<[], ArtworkSettings>("artwork_settings");
 const saveSteamGridDbKey = callable<[key: string], ArtworkSettings>("save_steamgriddb_key");
 const testSteamGridDbConnection = callable<[], { connected: boolean }>("test_steamgriddb_connection");
+type CloudSaveSettings = { enabled: boolean; autoDownload: boolean; autoUpload: boolean };
+type CloudSaveStatus = {
+  supported: boolean; state: string; direction: "download" | "upload" | "status";
+  localFiles: number; localBytes: number; localTimestamp: number; cloudTimestamp: number;
+  message?: string;
+};
+const getCloudSaveSettings = callable<[], CloudSaveSettings>("cloud_save_settings");
+const setCloudSaveEnabled = callable<[enabled: boolean], CloudSaveSettings>("set_cloud_save_enabled");
+const getCloudSaveStatus = callable<[providerId: string, externalGameId: string], CloudSaveStatus>("cloud_save_status");
+const syncCloudSave = callable<[providerId: string, externalGameId: string, direction: "download" | "upload"], CloudSaveStatus>("sync_cloud_save");
 const downloadSteamGridDbArtwork = callable<[url: string], { base64: string; mimeType: string }>("download_steamgriddb_artwork");
 const installSteamShortcutArtwork = callable<[providerId: string, externalGameId: string, steamAppId: number], { written: number; iconPath: string }>("install_steam_shortcut_artwork");
 const registerSteamShortcut = callable<[providerId: string, externalGameId: string, steamAppId: number], void>("register_steam_shortcut");
@@ -1986,6 +1996,7 @@ function Content() {
   const [steamGridDbKey, setSteamGridDbKey] = useState("");
   const [artworkBusy, setArtworkBusy] = useState(false);
   const [artworkMessage, setArtworkMessage] = useState<string>();
+  const [cloudSaveSettings, setCloudSaveSettingsState] = useState<CloudSaveSettings>();
   const [mihoyoRegion, setMihoyoRegion] = useState<"mihoyo_cn" | "mihoyo_bilibili" | "hoyoplay_global">("mihoyo_cn");
   const [changingMihoyoChannel, setChangingMihoyoChannel] = useState(false);
   const installLock = useRef(false);
@@ -2125,6 +2136,7 @@ function Content() {
       setArtworkSettings(settings);
       if (settings.steamGridDbConfigured) setArtworkMessage(t("steamGridDbConnected"));
     }).catch(() => undefined);
+    void withTimeout(getCloudSaveSettings()).then(setCloudSaveSettingsState).catch(() => undefined);
   }, [refresh]);
 
   const saveAndTestArtworkKey = useCallback(async () => {
@@ -2523,6 +2535,22 @@ function Content() {
         <PanelSectionRow>
           <div style={{ width: "100%" }}>
             <div data-gamebridge-maintenance-card="true" style={DASHBOARD_CARD_STYLE}>
+            <div style={{ color: "#fff", fontSize: 18, fontWeight: 700, marginBottom: 9 }}>{t("epicCloudSaves")}</div>
+            <div style={{ fontSize: 13, opacity: .7, lineHeight: 1.5, marginBottom: 8 }}>{t("epicCloudSavesHint")}</div>
+            <ToggleField
+              label={t("epicCloudSavesAutomatic")}
+              description={t("epicCloudSavesAutomaticHint")}
+              checked={cloudSaveSettings?.enabled ?? true}
+              disabled={!cloudSaveSettings}
+              onChange={(enabled) => {
+                setCloudSaveSettingsState((current) => current ? { ...current, enabled } : current);
+                void setCloudSaveEnabled(enabled).then(setCloudSaveSettingsState).catch((reason) => {
+                  setError(reason instanceof Error ? reason.message : String(reason));
+                  void getCloudSaveSettings().then(setCloudSaveSettingsState).catch(() => undefined);
+                });
+              }}
+            />
+            <div style={{ paddingTop: 10, marginTop: 8, borderTop: "1px solid rgba(255,255,255,.08)" }}>
             <div style={{ color: "#fff", fontSize: 18, fontWeight: 700, marginBottom: 9 }}>{t("playHistoryBackup")}</div>
             <div style={{ fontSize: 13, opacity: .7, lineHeight: 1.5, marginBottom: 12 }}>{t("playHistoryHint")}</div>
             <Focusable flow-children="horizontal" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
@@ -2534,6 +2562,7 @@ function Content() {
               </DialogButton>
             </Focusable>
             {playHistoryMessage && <div style={{ marginBottom: 12, fontSize: 12, opacity: .7, overflowWrap: "anywhere" }}>{playHistoryMessage}</div>}
+            </div>
             <div style={{ paddingTop: 10, marginTop: 2, borderTop: "1px solid rgba(255,255,255,.08)" }}>
             <div style={{ fontSize: 13, opacity: .7, lineHeight: 1.5, marginBottom: 10 }}>{t("cleanupHint")}</div>
             <DialogButton className={DASHBOARD_ACTION_CLASS} style={DASHBOARD_SECONDARY_BUTTON_STYLE} disabled={cleaningUp} onClick={confirmCleanup}>
@@ -2644,6 +2673,8 @@ function GameDetailView({ gameId, onBack }: { gameId: string; onBack: () => void
   const [job, setJob] = useState<InstallJob>();
   const [openingOfficialClient, setOpeningOfficialClient] = useState(false);
   const [changingChannel, setChangingChannel] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState<CloudSaveStatus>();
+  const [cloudBusy, setCloudBusy] = useState(false);
   const refreshRevision = useRef(0);
 
   const refreshGame = useCallback(async () => {
@@ -2654,6 +2685,13 @@ function GameDetailView({ gameId, onBack }: { gameId: string; onBack: () => void
       setGame(value);
       setJob(value.install_job);
       setError(undefined);
+      if (value.provider_id === "epic" && value.installed) {
+        void getCloudSaveStatus(value.provider_id, value.external_game_id)
+          .then(setCloudStatus)
+          .catch(() => setCloudStatus(undefined));
+      } else {
+        setCloudStatus(undefined);
+      }
     } catch (reason) {
       if (revision === refreshRevision.current) {
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -2755,6 +2793,33 @@ function GameDetailView({ gameId, onBack }: { gameId: string; onBack: () => void
             <PanelSectionRow><DetailLine label={t("compatibility")} value={compatibilityLabel(game.compatibility_status)} /></PanelSectionRow>
             <PanelSectionRow><DetailLine label={t("installStatus")} value={game.installed ? steamT("#DisplayStatus_NotLaunchable", "installed") : t("notInstalled")} /></PanelSectionRow>
             {game.description && <PanelSectionRow><div style={{ lineHeight: 1.45, opacity: .8 }}>{game.description}</div></PanelSectionRow>}
+            {game.provider_id === "epic" && game.installed && cloudStatus && (
+              <PanelSectionRow>
+                <div style={{ width: "100%", padding: 10, boxSizing: "border-box", borderRadius: 10, background: "rgba(0,0,0,.22)", border: "1px solid rgba(255,255,255,.08)" }}>
+                  <div style={{ fontWeight: 700 }}>{t("epicCloudSaves")}</div>
+                  <div style={{ margin: "6px 0 10px", fontSize: 12, opacity: .68 }}>
+                    {cloudStatus.supported
+                      ? t("epicCloudSavesStatus", { state: t(`cloudState_${cloudStatus.state}` as any), count: cloudStatus.localFiles })
+                      : t("epicCloudSavesUnsupported")}
+                  </div>
+                  {cloudStatus.supported && <Focusable flow-children="horizontal" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    {(["download", "upload"] as const).map((direction) => <DialogButton
+                      key={direction}
+                      disabled={cloudBusy}
+                      style={DASHBOARD_SECONDARY_BUTTON_STYLE}
+                      onClick={() => {
+                        setCloudBusy(true);
+                        setError(undefined);
+                        void syncCloudSave(game.provider_id, game.external_game_id, direction)
+                          .then(setCloudStatus)
+                          .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
+                          .finally(() => setCloudBusy(false));
+                      }}
+                    >{t(direction === "download" ? "cloudDownloadNow" : "cloudUploadNow")}</DialogButton>)}
+                  </Focusable>}
+                </div>
+              </PanelSectionRow>
+            )}
             {job && <PanelSectionRow><InstallProgress job={job} /></PanelSectionRow>}
             {game.provider_id === "mihoyo_cn" && game.channel_profile
               && (game.installed || game.external_game_id !== "bh3_cn") && (

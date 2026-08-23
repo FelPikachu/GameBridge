@@ -255,6 +255,24 @@ class Plugin:
     ) -> None:
         self.app.set_runtime_language(provider_id, external_game_id, language)
 
+    async def cloud_save_settings(self) -> dict[str, bool]:
+        return self.app.cloud_save_settings()
+
+    async def set_cloud_save_enabled(self, enabled: bool) -> dict[str, bool]:
+        return self.app.set_cloud_save_enabled(enabled)
+
+    async def cloud_save_status(
+        self, provider_id: str, external_game_id: str
+    ) -> dict[str, object]:
+        return await self.app.cloud_save_status(provider_id, external_game_id)
+
+    async def sync_cloud_save(
+        self, provider_id: str, external_game_id: str, direction: str
+    ) -> dict[str, object]:
+        return await self.app.sync_cloud_save(
+            provider_id, external_game_id, direction
+        )
+
     async def repair_shortcut_launch_options(
         self, current: str, provider_id: str, external_game_id: str
     ) -> str:

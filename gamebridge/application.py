@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from . import __version__
 from .compatibility import CompatibilityManager
+from .cloud_saves import EpicCloudSaveManager
 from .database import Database
 from .install import EpicInstallManager
 from .jobs import InstallJobStore
@@ -45,6 +46,7 @@ class GameBridgeApplication:
         self.providers = ProviderRegistry()
         self.tool_installer = ToolInstaller()
         self.compatibility = CompatibilityManager(self.data_directory / "compatibility")
+        self.cloud_saves = EpicCloudSaveManager(self.data_directory)
         self.epic_installs: EpicInstallManager | None = None
         self.simulated_updates: dict[str, asyncio.Task[None]] = {}
         self.provider_installer_processes: dict[str, asyncio.subprocess.Process] = {}
@@ -254,6 +256,26 @@ class GameBridgeApplication:
                 "revision=runtime_profiles.revision+1, updated_at=CURRENT_TIMESTAMP",
                 (profile_key, self.database.encode(profile)),
             )
+
+    def cloud_save_settings(self) -> dict[str, bool]:
+        return self.cloud_saves.settings()
+
+    def set_cloud_save_enabled(self, enabled: bool) -> dict[str, bool]:
+        return self.cloud_saves.set_enabled(enabled)
+
+    async def cloud_save_status(self, provider_id: str, game_id: str) -> dict[str, object]:
+        if provider_id != "epic":
+            return {"supported": False, "state": "unsupported", "direction": "status"}
+        return (await asyncio.to_thread(self.cloud_saves.status, game_id)).to_dict()
+
+    async def sync_cloud_save(
+        self, provider_id: str, game_id: str, direction: str
+    ) -> dict[str, object]:
+        if provider_id != "epic" or direction not in {"download", "upload"}:
+            raise ValueError("cloud_save.invalid_request")
+        return (
+            await asyncio.to_thread(self.cloud_saves.sync, game_id, direction)
+        ).to_dict()
 
     @staticmethod
     def repair_shortcut_launch_options(raw: str, provider_id: str, game_id: str) -> str:

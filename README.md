@@ -2,7 +2,7 @@
 
 GameBridge 是一款面向 Steam Deck / SteamOS 的非官方 Decky Loader 插件，用于将第三方平台游戏集中添加到 Steam 游戏库，并提供安装、启动、封面和兼容性管理。
 
-> 当前版本：`v0.19.0-beta.1`。这是公开测试版，部分游戏和 SteamOS 更新后的行为仍需实机验证。
+> 当前版本：`v0.19.0-beta.2`。这是公开测试版，部分游戏和 SteamOS 更新后的行为仍需实机验证。
 
 ## 当前支持
 
@@ -12,6 +12,7 @@ GameBridge 是一款面向 Steam Deck / SteamOS 的非官方 Decky Loader 插件
 - 同步、安装、更新和卸载游戏
 - 创建并维护 Steam 非 Steam 游戏卡片
 - 使用 UMU / Proton 兼容环境启动游戏
+- 对 Epic 官方支持的游戏自动下载与上传云存档，冲突时停止覆盖并保留本地备份
 - 管理 SteamGridDB 封面素材
 - 记录、导出和导入游戏时长及最后运行日期
 - 提供小黄鸭和 Decky Framegen 启动预设
