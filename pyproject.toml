@@ -1,0 +1,21 @@
+[project]
+name = "gamebridge"
+version = "0.19.0-beta.1"
+description = "Provider-driven game library and compatibility platform for SteamOS"
+requires-python = ">=3.11"
+license = { text = "MPL-2.0" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]

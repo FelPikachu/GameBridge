@@ -1,0 +1,11 @@
+{
+  "name": "GameBridge",
+  "author": "GameBridge contributors",
+  "flags": ["debug", "_root"],
+  "api_version": 1,
+  "publish": {
+    "tags": ["games", "library", "proton", "umu"],
+    "description": "Unified third-party game library and compatibility manager for SteamOS."
+  }
+}
+

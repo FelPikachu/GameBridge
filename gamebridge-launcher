@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -e
+
+plugin_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# Older shortcuts keep this token in their launch options. The fixed entry
+# point already knows the Python script, so accept and discard it.
+if [[ "${1:-}" == "gamebridge/launcher.py" || "${1:-}" == */gamebridge/launcher.py ]]; then
+  shift
+fi
+
+exec /usr/bin/python3 "$plugin_root/gamebridge/launcher.py" "$@"
