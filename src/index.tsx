@@ -8,7 +8,7 @@ import {
 } from "@decky/ui";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { FaArrowUpRightFromSquare, FaBridge, FaFolderOpen, FaPlay } from "react-icons/fa6";
-import { LuDownload, LuRefreshCw, LuUpload } from "react-icons/lu";
+import { LuChevronDown, LuDownload, LuRefreshCw, LuUpload } from "react-icons/lu";
 import { EPIC_GAMES_LOGO, MIHOYO_LAUNCHER_LOGO } from "./brand-assets";
 import { localizeBackend, steamT, t } from "./i18n";
 
@@ -154,6 +154,7 @@ type CloudSaveStatus = {
   localFiles: number; localBytes: number; localTimestamp: number; cloudTimestamp: number;
   message?: string;
 };
+type CloudSaveGame = { game: SteamLibraryGame; status: CloudSaveStatus };
 const getCloudSaveSettings = callable<[], CloudSaveSettings>("cloud_save_settings");
 const setCloudSaveEnabled = callable<[enabled: boolean], CloudSaveSettings>("set_cloud_save_enabled");
 const getCloudSaveStatus = callable<[providerId: string, externalGameId: string], CloudSaveStatus>("cloud_save_status");
@@ -1997,6 +1998,10 @@ function Content() {
   const [artworkBusy, setArtworkBusy] = useState(false);
   const [artworkMessage, setArtworkMessage] = useState<string>();
   const [cloudSaveSettings, setCloudSaveSettingsState] = useState<CloudSaveSettings>();
+  const [cloudSaveGames, setCloudSaveGames] = useState<CloudSaveGame[]>([]);
+  const [cloudSaveGamesLoading, setCloudSaveGamesLoading] = useState(true);
+  const [cloudSaveBusyGame, setCloudSaveBusyGame] = useState<string>();
+  const [cloudSaveGamesExpanded, setCloudSaveGamesExpanded] = useState(false);
   const [mihoyoRegion, setMihoyoRegion] = useState<"mihoyo_cn" | "mihoyo_bilibili" | "hoyoplay_global">("mihoyo_cn");
   const [changingMihoyoChannel, setChangingMihoyoChannel] = useState(false);
   const installLock = useRef(false);
@@ -2018,6 +2023,29 @@ function Content() {
       setDashboard(nextDashboard);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, []);
+
+  const refreshCloudSaveGames = useCallback(async () => {
+    setCloudSaveGamesLoading(true);
+    try {
+      const games = (await withTimeout(getSteamLibraryGames(), 30000))
+        .filter((game) => game.provider_id === "epic" && game.installed);
+      const next: CloudSaveGame[] = [];
+      // Legendary owns a single local login session. Keep status checks
+      // sequential so several installed games cannot race that session.
+      for (const game of games) {
+        const status = await withTimeout(
+          getCloudSaveStatus(game.provider_id, game.external_game_id),
+          45000,
+        );
+        next.push({ game, status });
+      }
+      setCloudSaveGames(next);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setCloudSaveGamesLoading(false);
     }
   }, []);
 
@@ -2137,7 +2165,30 @@ function Content() {
       if (settings.steamGridDbConfigured) setArtworkMessage(t("steamGridDbConnected"));
     }).catch(() => undefined);
     void withTimeout(getCloudSaveSettings()).then(setCloudSaveSettingsState).catch(() => undefined);
-  }, [refresh]);
+    void refreshCloudSaveGames();
+  }, [refresh, refreshCloudSaveGames]);
+
+  const runCloudSaveSync = useCallback(async (
+    item: CloudSaveGame,
+    direction: "download" | "upload",
+  ) => {
+    if (cloudSaveBusyGame) return;
+    const key = item.game.external_game_id;
+    setCloudSaveBusyGame(key);
+    setError(undefined);
+    try {
+      const status = await withTimeout(
+        syncCloudSave(item.game.provider_id, key, direction),
+        240000,
+      );
+      setCloudSaveGames((current) => current.map((entry) =>
+        entry.game.external_game_id === key ? { ...entry, status } : entry));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setCloudSaveBusyGame(undefined);
+    }
+  }, [cloudSaveBusyGame]);
 
   const saveAndTestArtworkKey = useCallback(async () => {
     if (artworkBusy || !steamGridDbKey.trim()) return;
@@ -2531,10 +2582,9 @@ function Content() {
           </div>
         </PanelSectionRow>
       </PanelSection>
-      <PanelSection title={t("maintenance")}>
+      <PanelSection title={t("epicCloudSaves")}>
         <PanelSectionRow>
-          <div style={{ width: "100%" }}>
-            <div data-gamebridge-maintenance-card="true" style={DASHBOARD_CARD_STYLE}>
+          <div style={DASHBOARD_CARD_STYLE}>
             <div style={{ color: "#fff", fontSize: 18, fontWeight: 700, marginBottom: 9 }}>{t("epicCloudSaves")}</div>
             <div style={{ fontSize: 13, opacity: .7, lineHeight: 1.5, marginBottom: 8 }}>{t("epicCloudSavesHint")}</div>
             <ToggleField
@@ -2551,6 +2601,65 @@ function Content() {
               }}
             />
             <div style={{ paddingTop: 10, marginTop: 8, borderTop: "1px solid rgba(255,255,255,.08)" }}>
+              <DialogButton
+                className={DASHBOARD_ACTION_CLASS}
+                style={{
+                  ...DASHBOARD_SECONDARY_BUTTON_STYLE,
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "0 12px", textAlign: "left",
+                }}
+                aria-expanded={cloudSaveGamesExpanded}
+                onClick={() => setCloudSaveGamesExpanded((expanded) => !expanded)}
+              >
+                <span>{t("cloudGameList", { count: cloudSaveGames.filter((item) => item.status.supported).length })}</span>
+                <LuChevronDown
+                  size={18}
+                  style={{ transform: cloudSaveGamesExpanded ? "rotate(180deg)" : undefined, transition: "transform 120ms ease" }}
+                />
+              </DialogButton>
+              {cloudSaveGamesExpanded && (
+                <div style={{ paddingTop: 12 }}>
+                  {cloudSaveGamesLoading && <OperationProgress label={t("cloudStatusLoading")} />}
+                  {!cloudSaveGamesLoading && cloudSaveGames.filter((item) => item.status.supported).length === 0 && (
+                    <div style={{ fontSize: 13, opacity: .65 }}>{t("cloudNoSupportedGames")}</div>
+                  )}
+                  {cloudSaveGames.filter((item) => item.status.supported).map((item, index) => {
+                    const busy = cloudSaveBusyGame === item.game.external_game_id;
+                    return <div key={item.game.external_game_id} style={{ paddingTop: index ? 12 : 0, marginTop: index ? 12 : 0, borderTop: index ? "1px solid rgba(255,255,255,.08)" : undefined }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 9 }}>
+                        <div style={{ minWidth: 0, fontSize: 15, fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.game.title}</div>
+                        <div style={{ ...DASHBOARD_STATUS_BADGE_STYLE, flex: "0 0 auto", color: "#8ff0b5", background: "rgba(45,190,105,.16)" }}>
+                          {t(`cloudState_${item.status.state}` as any)} · {t("cloudFileCount", { count: item.status.localFiles })}
+                        </div>
+                      </div>
+                      <Focusable flow-children="horizontal" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        <DialogButton className={DASHBOARD_ACTION_CLASS} style={DASHBOARD_SECONDARY_BUTTON_STYLE} disabled={busy} onClick={() => void runCloudSaveSync(item, "download")}>
+                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7, whiteSpace: "nowrap" }}><LuDownload size={DASHBOARD_ICON_SIZE} />{t("cloudDownloadNow")}</span>
+                        </DialogButton>
+                        <DialogButton className={DASHBOARD_ACTION_CLASS} style={DASHBOARD_SECONDARY_BUTTON_STYLE} disabled={busy} onClick={() => void runCloudSaveSync(item, "upload")}>
+                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7, whiteSpace: "nowrap" }}><LuUpload size={DASHBOARD_ICON_SIZE} />{t("cloudUploadNow")}</span>
+                        </DialogButton>
+                      </Focusable>
+                    </div>;
+                  })}
+                  {!cloudSaveGamesLoading && cloudSaveGames.some((item) => !item.status.supported) && (
+                    <div style={{ marginTop: 10, fontSize: 12, opacity: .56, lineHeight: 1.45 }}>
+                      {t("cloudUnsupportedGames", {
+                        count: cloudSaveGames.filter((item) => !item.status.supported).length,
+                        games: cloudSaveGames.filter((item) => !item.status.supported).slice(0, 2).map((item) => item.game.title).join(", "),
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </PanelSectionRow>
+      </PanelSection>
+      <PanelSection title={t("maintenance")}>
+        <PanelSectionRow>
+          <div style={{ width: "100%" }}>
+            <div data-gamebridge-maintenance-card="true" style={DASHBOARD_CARD_STYLE}>
             <div style={{ color: "#fff", fontSize: 18, fontWeight: 700, marginBottom: 9 }}>{t("playHistoryBackup")}</div>
             <div style={{ fontSize: 13, opacity: .7, lineHeight: 1.5, marginBottom: 12 }}>{t("playHistoryHint")}</div>
             <Focusable flow-children="horizontal" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
@@ -2562,7 +2671,6 @@ function Content() {
               </DialogButton>
             </Focusable>
             {playHistoryMessage && <div style={{ marginBottom: 12, fontSize: 12, opacity: .7, overflowWrap: "anywhere" }}>{playHistoryMessage}</div>}
-            </div>
             <div style={{ paddingTop: 10, marginTop: 2, borderTop: "1px solid rgba(255,255,255,.08)" }}>
             <div style={{ fontSize: 13, opacity: .7, lineHeight: 1.5, marginBottom: 10 }}>{t("cleanupHint")}</div>
             <DialogButton className={DASHBOARD_ACTION_CLASS} style={DASHBOARD_SECONDARY_BUTTON_STYLE} disabled={cleaningUp} onClick={confirmCleanup}>
@@ -2673,8 +2781,6 @@ function GameDetailView({ gameId, onBack }: { gameId: string; onBack: () => void
   const [job, setJob] = useState<InstallJob>();
   const [openingOfficialClient, setOpeningOfficialClient] = useState(false);
   const [changingChannel, setChangingChannel] = useState(false);
-  const [cloudStatus, setCloudStatus] = useState<CloudSaveStatus>();
-  const [cloudBusy, setCloudBusy] = useState(false);
   const refreshRevision = useRef(0);
 
   const refreshGame = useCallback(async () => {
@@ -2685,13 +2791,6 @@ function GameDetailView({ gameId, onBack }: { gameId: string; onBack: () => void
       setGame(value);
       setJob(value.install_job);
       setError(undefined);
-      if (value.provider_id === "epic" && value.installed) {
-        void getCloudSaveStatus(value.provider_id, value.external_game_id)
-          .then(setCloudStatus)
-          .catch(() => setCloudStatus(undefined));
-      } else {
-        setCloudStatus(undefined);
-      }
     } catch (reason) {
       if (revision === refreshRevision.current) {
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -2793,33 +2892,6 @@ function GameDetailView({ gameId, onBack }: { gameId: string; onBack: () => void
             <PanelSectionRow><DetailLine label={t("compatibility")} value={compatibilityLabel(game.compatibility_status)} /></PanelSectionRow>
             <PanelSectionRow><DetailLine label={t("installStatus")} value={game.installed ? steamT("#DisplayStatus_NotLaunchable", "installed") : t("notInstalled")} /></PanelSectionRow>
             {game.description && <PanelSectionRow><div style={{ lineHeight: 1.45, opacity: .8 }}>{game.description}</div></PanelSectionRow>}
-            {game.provider_id === "epic" && game.installed && cloudStatus && (
-              <PanelSectionRow>
-                <div style={{ width: "100%", padding: 10, boxSizing: "border-box", borderRadius: 10, background: "rgba(0,0,0,.22)", border: "1px solid rgba(255,255,255,.08)" }}>
-                  <div style={{ fontWeight: 700 }}>{t("epicCloudSaves")}</div>
-                  <div style={{ margin: "6px 0 10px", fontSize: 12, opacity: .68 }}>
-                    {cloudStatus.supported
-                      ? t("epicCloudSavesStatus", { state: t(`cloudState_${cloudStatus.state}` as any), count: cloudStatus.localFiles })
-                      : t("epicCloudSavesUnsupported")}
-                  </div>
-                  {cloudStatus.supported && <Focusable flow-children="horizontal" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                    {(["download", "upload"] as const).map((direction) => <DialogButton
-                      key={direction}
-                      disabled={cloudBusy}
-                      style={DASHBOARD_SECONDARY_BUTTON_STYLE}
-                      onClick={() => {
-                        setCloudBusy(true);
-                        setError(undefined);
-                        void syncCloudSave(game.provider_id, game.external_game_id, direction)
-                          .then(setCloudStatus)
-                          .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
-                          .finally(() => setCloudBusy(false));
-                      }}
-                    >{t(direction === "download" ? "cloudDownloadNow" : "cloudUploadNow")}</DialogButton>)}
-                  </Focusable>}
-                </div>
-              </PanelSectionRow>
-            )}
             {job && <PanelSectionRow><InstallProgress job={job} /></PanelSectionRow>}
             {game.provider_id === "mihoyo_cn" && game.channel_profile
               && (game.installed || game.external_game_id !== "bh3_cn") && (
