@@ -18,7 +18,7 @@ def test_controller_focus_flows_match_visual_layout() -> None:
     assert 'strip.setAttribute("flow-children", "row")' in SOURCE
     assert 'node.ownerDocument.addEventListener("keydown", keydown, true)' in SOURCE
     assert 'candidate.classList.contains("gpfocus")' in SOURCE
-    assert '<ProviderTabAddon count={epicGames.length} manageFocus />' in SOURCE
+    assert '<ProviderTabAddon count={epicGames.length} providerId="epic" manageFocus />' in SOURCE
     assert 'flow-children="grid"' in SOURCE
     assert 'data-gamebridge-library-card="true"' in SOURCE
     assert 'onGamepadDirection={handleGridGamepadDirection}' in SOURCE
@@ -79,10 +79,10 @@ def test_hoyoplay_uninstall_opens_the_selected_official_launcher() -> None:
 def test_hoyoplay_presets_preserve_the_stable_shortcut_route() -> None:
     assert 'if (isHoYoPlayGame && game.steam_shortcut)' in SOURCE
     assert "applyManagedShortcutTarget(appId, game)" in SOURCE
-    assert '`${prefixes[preset]} ${game.steam_shortcut.launch_options}`' in SOURCE
-    assert 'lsfg: "~/lsfg %command%"' in SOURCE
-    assert 'framegen: "WINEDLLOVERRIDES=dxgi=n,b SteamDeck=0 %command%"' in SOURCE
-    assert 'combined: "~/fgmod/fgmod ~/lsfg %command%"' in SOURCE
+    assert "const launchOptions = await shortcutProfileLaunchPreset(" in SOURCE
+    assert "game.steam_shortcut.launch_options," in SOURCE
+    assert "game.steam_shortcut.mode," in SOURCE
+    assert 'callable<[preset: LaunchPreset, base: string, mode: SteamShortcutProfile["mode"]], string>("shortcut_profile_launch_preset")' in SOURCE
     assert 'onSelected={() => scheduleIntegratedLaunchPreset(appId, game, "default")}' in SOURCE
     assert 'onSelected={() => scheduleIntegratedLaunchPreset(appId, game, "combined")}' in SOURCE
     assert 'applyIntegratedLaunchPreset(appId, game, preset).catch' in SOURCE
@@ -93,6 +93,14 @@ def test_hoyoplay_presets_preserve_the_stable_shortcut_route() -> None:
     assert shortcut_writer.index("SetShortcutLaunchOptions") < shortcut_writer.index(
         "SetAppLaunchOptions"
     )
+
+
+def test_hoyoplay_region_switch_reconciles_the_shared_steam_cards() -> None:
+    region_switch = SOURCE.split("void switchHoYoPlayChannelSelection(", 1)[1].split(
+        ").catch((reason) =>", 1
+    )[0]
+    assert "return withTimeout(getSteamLibraryGames(), 60000)" in region_switch
+    assert "cacheSteamLibraryGames(games)" in region_switch
 
 
 def test_epic_install_action_uses_blue_native_style() -> None:
@@ -221,6 +229,42 @@ def test_dashboard_does_not_show_the_legacy_library_entry() -> None:
     assert "function LibraryView" in SOURCE
 
 
+def test_compatibility_preparation_is_automatic_and_allows_runtime_download() -> None:
+    assert "automaticCompatibilityAttempted.current = true" in SOURCE
+    assert SOURCE.count("withTimeout(prepareCompatibility(), 900000)") == 2
+
+
+def test_hoyoplay_runtime_is_ready_before_first_shortcut_profile_is_read() -> None:
+    section = SOURCE.split("const openNativeDetails", 1)[1].split(
+        "const moveGameGridFocus", 1
+    )[0]
+    prepare = section.index("await prepareHoYoPlayGameRuntime(game.external_game_id)")
+    refresh = section.index("const fresh = await getGameDetails(game.id)")
+    create = section.index("SteamClient.Apps.AddShortcut")
+    assert prepare < refresh < create
+
+
+def test_first_custom_compat_tool_install_prompts_for_one_restart() -> None:
+    assert "GetAvailableCompatTools(appId)" in SOURCE
+    assert "user.StartRestart(false)" in SOURCE
+    assert 'strTitle={t("compatRestartTitle")}' in SOURCE
+    assert 'strOKButtonText={t("restartSteam")}' in SOURCE
+    assert "showCompatToolRestartPromptIfRequired(existingAppId, game)" in SOURCE
+    assert "showCompatToolRestartPromptIfRequired(appId, game)" in SOURCE
+    assert "resumeAfterCompatToolRestart" not in SOURCE
+    assert "pendingCompatRestart" not in SOURCE
+
+
+def test_bh3_hotfix_install_is_claimed_and_continued_by_steam() -> None:
+    assert "RegisterForShowInstallWizard" in SOURCE
+    assert "claimSteamInstallRequest(PROTON_HOTFIX_APP_ID)" in SOURCE
+    assert "await installs.SetCreateShortcuts(false, false)" in SOURCE
+    assert "await installs.ContinueInstall()" in SOURCE
+    assert "await downloads.SetQueueIndex(PROTON_HOTFIX_APP_ID, 0)" in SOURCE
+    assert "await downloads.ResumeAppUpdate(PROTON_HOTFIX_APP_ID)" in SOURCE
+    assert "removeManagedSteamInstalls();" in SOURCE
+
+
 def test_maintenance_actions_share_the_dashboard_card_style() -> None:
     assert 'data-gamebridge-maintenance-card="true" style={DASHBOARD_CARD_STYLE}' in SOURCE
     assert 'borderTop: "1px solid rgba(255,255,255,.08)"' in SOURCE
@@ -239,3 +283,13 @@ def test_epic_library_tab_requires_a_connected_account() -> None:
     assert 'provider.id === "epic" && provider.status.state === "connected"' in SOURCE
     assert "const providerTabs = epicConnected ? [epicTab] : [];" in SOURCE
     assert 'tab?.id !== "gamebridge-epic" && tab?.id !== "gamebridge-mihoyo"' in SOURCE
+
+
+def test_epic_sync_refreshes_the_library_tab_cache_and_count() -> None:
+    assert 'gameCount?: number;' in SOURCE
+    assert 'providerId="epic"' in SOURCE
+    assert 'const GAMEBRIDGE_LIBRARY_UPDATED = "gamebridge-library-updated"' in SOURCE
+    assert 'const GAMEBRIDGE_DASHBOARD_UPDATED = "gamebridge-dashboard-updated"' in SOURCE
+    assert "await refreshSteamLibraryGameCache();" in SOURCE
+    assert "window.dispatchEvent(new Event(GAMEBRIDGE_LIBRARY_UPDATED))" in SOURCE
+    assert "window.addEventListener(GAMEBRIDGE_DASHBOARD_UPDATED, update)" in SOURCE

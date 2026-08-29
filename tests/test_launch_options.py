@@ -2,7 +2,11 @@ import shlex
 
 import pytest
 
-from gamebridge.launch_options import preset_launch_options, repair_launch_options
+from gamebridge.launch_options import (
+    preset_launch_options,
+    repair_launch_options,
+    shortcut_profile_launch_options,
+)
 
 
 def repaired(raw: str) -> list[str]:
@@ -127,6 +131,75 @@ def test_user_facing_presets_match_the_three_verified_combinations():
 def test_unknown_launch_preset_is_rejected():
     with pytest.raises(ValueError, match="invalid_preset"):
         preset_launch_options("unknown", "epic", "lego-id")
+
+
+@pytest.mark.parametrize("route_game_id", ["genshin", "zzz", "starrail", "honkai3"])
+def test_hoyoplay_router_presets_keep_the_stable_route(route_game_id):
+    base = (
+        '"gamebridge/launcher.py" --provider mihoyo '
+        f'--game-id "{route_game_id}"'
+    )
+    default = shlex.split(shortcut_profile_launch_options(
+        "default", base, "gamebridge_router"
+    ))
+    lsfg = shlex.split(shortcut_profile_launch_options(
+        "lsfg", base, "gamebridge_router"
+    ))
+    framegen = shlex.split(shortcut_profile_launch_options(
+        "framegen", base, "gamebridge_router"
+    ))
+    combined = shlex.split(shortcut_profile_launch_options(
+        "combined", base, "gamebridge_router"
+    ))
+
+    for tokens in (default, lsfg, framegen, combined):
+        assert tokens[tokens.index("--provider") + 1] == "mihoyo"
+        assert tokens[tokens.index("--game-id") + 1] == route_game_id
+        assert tokens.count("gamebridge/launcher.py") == 1
+    assert lsfg[:2] == ["~/lsfg", "%command%"]
+    assert framegen[:3] == [
+        "WINEDLLOVERRIDES=dxgi=n,b", "SteamDeck=0", "%command%",
+    ]
+    assert combined[:2] == ["~/lsfg", "%command%"]
+    assert combined[-2:] == ["--game-wrapper", "~/fgmod/fgmod"]
+
+
+def test_direct_genshin_presets_wrap_the_single_real_game_command():
+    base = (
+        'WINE_ENABLE_TIMEOUT_FIX=1 "/home/deck/homebrew/plugins/GameBridge/'
+        'gamebridge/channel_guard.py" --game-id "hk4e_cn" -- %command%'
+    )
+    lsfg = shlex.split(shortcut_profile_launch_options(
+        "lsfg", base, "direct_executable"
+    ))
+    framegen = shlex.split(shortcut_profile_launch_options(
+        "framegen", base, "direct_executable"
+    ))
+    combined = shlex.split(shortcut_profile_launch_options(
+        "combined", base, "direct_executable"
+    ))
+
+    for tokens in (lsfg, framegen, combined):
+        assert tokens.count("%command%") == 1
+        assert sum(token.endswith("channel_guard.py") for token in tokens) == 1
+        assert tokens[tokens.index("--game-id") + 1] == "hk4e_cn"
+    assert lsfg[-2:] == ["~/lsfg", "%command%"]
+    assert framegen[:2] == ["WINEDLLOVERRIDES=dxgi=n,b", "SteamDeck=0"]
+    assert combined[-3:] == ["~/fgmod/fgmod", "~/lsfg", "%command%"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "base"),
+    [
+        ("direct_executable", "no-placeholder"),
+        ("direct_executable", "%command% %command%"),
+        ("gamebridge_router", "not-gamebridge"),
+        ("unknown", "%command%"),
+    ],
+)
+def test_shortcut_profile_preset_rejects_unsafe_routes(mode, base):
+    with pytest.raises(ValueError, match="invalid_shortcut_profile"):
+        shortcut_profile_launch_options("combined", base, mode)
 
 
 @pytest.mark.parametrize(

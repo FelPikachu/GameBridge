@@ -25,7 +25,7 @@ from ..models import (
     RuntimeProfile,
 )
 from ..provider import GameProvider
-from ..storage import storage_health
+from ..storage import storage_health, storage_roots
 
 SYSTEM_CA_FILES = (
     "/etc/ssl/cert.pem",
@@ -39,7 +39,13 @@ _REGISTRY_SECTION = re.compile(
 _REGISTRY_VALUE = re.compile(r'^"(?P<name>[^"]+)"="(?P<value>(?:\\\\.|[^"])*)"$', re.MULTILINE)
 _WINE_DRIVE_PATH = re.compile(r"^(?P<drive>[A-Za-z]):\\(?P<path>.*)$")
 _CHANNEL_VALUE = re.compile(r"(?mi)^channel[ \t]*=[ \t]*([^\r\n]+)\r?$")
-_CHANNEL_COMPONENTS = ("PCGameSDK.dll", "sdk_pkg_version", "license.txt", "lfailedlog.db")
+_CHANNEL_COMPONENTS = (
+    "PCGameSDK.dll",
+    "sdk_pkg_version",
+    "license.txt",
+    "lfailedlog.db",
+    "deletefiles.txt",
+)
 _CHANNEL_NAMES = {"1": "official", "14": "bilibili"}
 _CHANNEL_SETTINGS = {
     "official": {"channel": "1", "sub_channel": "1", "cps": "hyp_mihoyo"},
@@ -202,12 +208,141 @@ class HoYoPlayProvider(GameProvider):
             candidate = self.prefix_directory / relative
             if candidate.is_file():
                 return candidate
+        retained = self._retained_launcher_executable()
+        if retained is not None:
+            return retained
         registered = self._registered_launcher_executable()
         if registered is not None and registered.is_file():
+            self._remember_launcher_executable(registered)
             return registered
         return None
 
-    def _registered_launcher_executable(self) -> Path | None:
+    def discover_adjacent_installations(self) -> JsonObject:
+        """Remember unregistered games found beside the verified official launcher."""
+        launcher = self.launcher_executable()
+        if launcher is None:
+            return {}
+        games_root = launcher.parent / "games"
+        if games_root.is_symlink() or not games_root.is_dir():
+            return {}
+        try:
+            directories = tuple(
+                path
+                for path in games_root.iterdir()
+                if path.is_dir() and not path.is_symlink()
+            )
+        except OSError:
+            return {}
+        discovered: JsonObject = {}
+        for game in self.spec.games:
+            matches = [
+                directory
+                for directory in directories
+                if any(
+                    (directory / executable).is_file()
+                    and not (directory / executable).is_symlink()
+                    for executable in game.executable_names
+                )
+            ]
+            if len(matches) != 1:
+                continue
+            resolved = matches[0].resolve()
+            self._remember_install_path(game.external_game_id, resolved)
+            discovered[game.external_game_id] = os.fspath(resolved)
+        return discovered
+
+    def prepare_launcher_game_association(self) -> JsonObject:
+        """Make restored CN games acceptable to a freshly installed official launcher."""
+        discovered = self.discover_adjacent_installations()
+        repaired: list[str] = []
+        if self.provider_id == "mihoyo_cn":
+            for external_game_id in _BILIBILI_GAME_API:
+                try:
+                    directory = self._installed_game_directory(external_game_id)
+                    config, current = self._read_channel_config(directory)
+                    if current == "bilibili":
+                        # Keep a complete Bilibili profile before presenting the
+                        # same game body to the official launcher for association.
+                        self.switch_channel_profile(external_game_id, "official")
+                        repaired.append(external_game_id)
+                    elif self._has_bilibili_residue(directory, config):
+                        # Some older builds restored channel=1 but left the Bilibili
+                        # SDK behind. Reconstruct its Bilibili profile first, so the
+                        # cleanup below is reversible and later switching still works.
+                        backup = (
+                            self.data_directory
+                            / "association-recovery"
+                            / external_game_id
+                            / "config.ini.before-recovery"
+                        )
+                        backup.parent.mkdir(parents=True, exist_ok=True)
+                        if not backup.exists():
+                            backup.write_bytes(config)
+                        staged = directory / ".config.ini.gamebridge-association"
+                        staged.write_bytes(
+                            self._normalize_channel_config(config, "bilibili")
+                        )
+                        os.replace(staged, directory / "config.ini")
+                        try:
+                            self.switch_channel_profile(external_game_id, "official")
+                        except (OSError, ValueError, RuntimeError):
+                            restore = directory / ".config.ini.gamebridge-restore"
+                            restore.write_bytes(config)
+                            os.replace(restore, directory / "config.ini")
+                            raise
+                        finally:
+                            staged.unlink(missing_ok=True)
+                        repaired.append(external_game_id)
+                except (OSError, ValueError):
+                    continue
+        return {"discovered": discovered, "repaired": repaired}
+
+    def _has_bilibili_residue(self, directory: Path, config: bytes) -> bool:
+        try:
+            text = config.decode("utf-8", errors="strict")
+        except UnicodeError:
+            return False
+        if re.search(r"(?mi)^sdk_version[ \t]*=", text):
+            return True
+        return any(
+            "blplatform64" in {part.casefold() for part in source.relative_to(directory).parts}
+            for source in self._channel_component_files(directory)
+        )
+
+    @property
+    def retained_launcher_path(self) -> Path:
+        return self.data_directory / "retained-launcher-path"
+
+    def _retained_launcher_executable(self) -> Path | None:
+        try:
+            raw = self.retained_launcher_path.read_text(encoding="utf-8").strip()
+            executable = Path(raw).expanduser().resolve()
+        except OSError:
+            return None
+        return executable if executable.is_file() else None
+
+    def _remember_launcher_executable(self, executable: Path) -> None:
+        resolved = executable.expanduser().resolve()
+        try:
+            current = self.retained_launcher_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            current = ""
+        if current == os.fspath(resolved):
+            return
+        staged = self.retained_launcher_path.with_suffix(".new")
+        try:
+            self.retained_launcher_path.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_text(os.fspath(resolved), encoding="utf-8")
+            os.replace(staged, self.retained_launcher_path)
+        except OSError:
+            return
+        finally:
+            try:
+                staged.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _registered_launcher_executable(self, *, allow_missing: bool = False) -> Path | None:
         """Resolve the official install record through this prefix's drive map."""
         for registry_name in ("system.reg", "user.reg"):
             registry = self.prefix_directory / registry_name
@@ -224,11 +359,29 @@ class HoYoPlayProvider(GameProvider):
                 if install_path is None:
                     continue
                 executable = self._resolve_wine_path(
-                    install_path.rstrip("\\") + "\\launcher.exe"
+                    install_path.rstrip("\\") + "\\launcher.exe",
+                    allow_missing=allow_missing,
                 )
                 if executable is not None:
                     return executable
         return None
+
+    def _registered_launcher_storage_unavailable(self) -> bool:
+        for registry_name in ("system.reg", "user.reg"):
+            registry = self.prefix_directory / registry_name
+            try:
+                contents = registry.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for _header, values in self._registry_sections(contents):
+                if not values.get("GameBiz", "").casefold().startswith("hyp_"):
+                    continue
+                if values.get("ExeName", "").casefold() != "launcher.exe":
+                    continue
+                install_path = values.get("InstallPath")
+                if install_path is not None:
+                    return self._wine_storage_unavailable(install_path)
+        return False
 
     @staticmethod
     def _registry_sections(contents: str) -> Sequence[tuple[str, dict[str, str]]]:
@@ -243,22 +396,93 @@ class HoYoPlayProvider(GameProvider):
             for match in _REGISTRY_SECTION.finditer(contents)
         )
 
-    def _resolve_wine_path(self, value: str) -> Path | None:
+    def _wine_path_parts(self, value: str) -> tuple[str, tuple[str, ...]] | None:
         match = _WINE_DRIVE_PATH.fullmatch(value)
         if match is None:
             return None
         relative_parts = tuple(part for part in match.group("path").split("\\") if part)
         if not relative_parts or any(part in {".", ".."} for part in relative_parts):
             return None
-        drive = self.prefix_directory / "dosdevices" / f"{match.group('drive').lower()}:"
+        return match.group("drive").lower(), relative_parts
+
+    @staticmethod
+    def _candidate_rank(candidate: Path, required_names: tuple[str, ...]) -> int:
+        if candidate.is_file():
+            return 3
+        if not candidate.is_dir():
+            return 0
+        if required_names and any((candidate / name).is_file() for name in required_names):
+            return 3
+        if any(
+            (candidate / marker).exists()
+            for marker in ("chunk", "staging", "pkg_version", "config.ini")
+        ):
+            return 2
+        return 1
+
+    def _resolve_wine_path(
+        self,
+        value: str,
+        *,
+        required_names: tuple[str, ...] = (),
+        allow_missing: bool = False,
+    ) -> Path | None:
+        parsed = self._wine_path_parts(value)
+        if parsed is None:
+            return None
+        drive_name, relative_parts = parsed
+        drive = self.prefix_directory / "dosdevices" / f"{drive_name}:"
+        missing_candidate: Path | None = None
         try:
-            drive_root = drive.resolve(strict=True)
-            candidate = drive_root.joinpath(*relative_parts).resolve(strict=True)
+            drive_root = drive.resolve(strict=False)
+            candidate = drive_root.joinpath(*relative_parts)
+            missing_candidate = candidate
+            resolved = candidate.resolve(strict=True)
         except OSError:
-            return None
-        if candidate == drive_root or not candidate.is_relative_to(drive_root):
-            return None
-        return candidate
+            resolved = None
+        if resolved is not None and resolved != drive_root and resolved.is_relative_to(drive_root):
+            if self._candidate_rank(resolved, required_names):
+                return resolved
+
+        # Removable-drive letters are not stable across a reinstall or another
+        # machine. Reapply the registry's relative path to every mounted root.
+        if drive_name not in {"c", "z"}:
+            ranked: list[tuple[int, Path]] = []
+            for root in storage_roots():
+                if root.internal:
+                    continue
+                try:
+                    root_path = root.path.resolve(strict=True)
+                    external = root_path.joinpath(*relative_parts).resolve(strict=True)
+                except OSError:
+                    continue
+                if external == root_path or not external.is_relative_to(root_path):
+                    continue
+                rank = self._candidate_rank(external, required_names)
+                if rank:
+                    ranked.append((rank, external))
+            if ranked:
+                best = max(rank for rank, _candidate in ranked)
+                matches = sorted(
+                    {candidate for rank, candidate in ranked if rank == best},
+                    key=os.fspath,
+                )
+                if len(matches) == 1:
+                    return matches[0]
+        return missing_candidate if allow_missing else None
+
+    def _wine_storage_unavailable(self, value: str) -> bool:
+        parsed = self._wine_path_parts(value)
+        if parsed is None:
+            return False
+        drive_name, _relative_parts = parsed
+        drive = self.prefix_directory / "dosdevices" / f"{drive_name}:"
+        if not drive.is_symlink():
+            return False
+        try:
+            return not drive.resolve(strict=False).is_dir()
+        except OSError:
+            return True
 
     @property
     def managed_installer(self) -> Path:
@@ -391,10 +615,26 @@ class HoYoPlayProvider(GameProvider):
     async def connection_status(self) -> JsonObject:
         executable = self.launcher_executable()
         if executable is None:
+            unavailable = self._registered_launcher_executable(allow_missing=True)
+            if unavailable is not None and self._registered_launcher_storage_unavailable():
+                return {
+                    "state": "storage_unavailable",
+                    "message": "hoyoplay.launcher_storage_unavailable",
+                    "action": "wait_for_storage",
+                    "officialPage": self.spec.official_page,
+                    "region": self.spec.region,
+                    "prefixPath": os.fspath(self.prefix_directory),
+                    "executable": os.fspath(unavailable),
+                    "storageState": "unavailable",
+                }
             status: JsonObject = {
                 "state": "not_installed",
                 "message": "hoyoplay.not_installed",
-                "action": "run_installer" if self.managed_installer.is_file() else "download_installer",
+                "action": (
+                    "run_installer"
+                    if self.managed_installer.is_file()
+                    else "download_installer"
+                ),
                 "officialPage": self.spec.official_page,
                 "region": self.spec.region,
                 "prefixPath": os.fspath(self.prefix_directory),
@@ -409,7 +649,7 @@ class HoYoPlayProvider(GameProvider):
                 except (OSError, ValueError):
                     pass
             return status
-        return {
+        status: JsonObject = {
             "state": "installed",
             "message": "hoyoplay.installed_login_in_client",
             "action": "launch_client",
@@ -418,6 +658,22 @@ class HoYoPlayProvider(GameProvider):
             "prefixPath": os.fspath(self.prefix_directory),
             "executable": os.fspath(executable),
         }
+        unavailable_games = [
+            game.title
+            for game in self.spec.games
+            if self.game_installation(
+                game.external_game_id, include_channel_profile=False
+            ).get("storage_state") == "unavailable"
+        ]
+        if unavailable_games:
+            status.update(
+                {
+                    "message": "hoyoplay.game_storage_unavailable",
+                    "storageState": "unavailable",
+                    "unavailableGames": unavailable_games,
+                }
+            )
+        return status
 
     async def library(self) -> Sequence[GameReference]:
         # This is a public product catalog, not an ownership or account claim.
@@ -442,11 +698,21 @@ class HoYoPlayProvider(GameProvider):
         if game is None:
             raise KeyError(f"unknown {self.provider_id} game: {external_game_id}")
         install_path: Path | None = None
+        storage_unavailable = False
         raw_path = self.game_registry_install_path(external_game_id)
         if raw_path:
-            install_path = self._resolve_wine_path(raw_path)
-        if install_path is None:
-            install_path = self._retained_install_path(external_game_id)
+            install_path = self._resolve_wine_path(
+                raw_path, required_names=game.executable_names
+            )
+        retained = self._retained_install_path(external_game_id)
+        if install_path is None and retained is not None and retained.exists():
+            install_path = retained
+        if install_path is None and raw_path and self._wine_storage_unavailable(raw_path):
+            install_path = self._resolve_wine_path(raw_path, allow_missing=True)
+            storage_unavailable = install_path is not None
+        if install_path is None and retained is not None:
+            install_path = retained
+            storage_unavailable = self._external_storage_unavailable(retained)
 
         executable = None
         partial = False
@@ -461,13 +727,21 @@ class HoYoPlayProvider(GameProvider):
                 for marker in ("chunk", "staging", "pkg_version", "config.ini")
             )
         installed = executable is not None
+        if installed and install_path is not None:
+            self._remember_install_path(external_game_id, install_path)
         official_client_installed = self.launcher_executable() is not None
         health = storage_health(install_path) if install_path is not None else None
         result: JsonObject = {
             "installed": installed,
             "partial": partial,
             "install_state": (
-                "installed" if installed else "partial" if partial else "not_installed"
+                "installed"
+                if installed
+                else "partial"
+                if partial
+                else "storage_unavailable"
+                if storage_unavailable
+                else "not_installed"
             ),
             "launchable": bool(
                 installed
@@ -475,13 +749,21 @@ class HoYoPlayProvider(GameProvider):
                 and game.compatibility_status == CompatibilityStatus.EXPERIMENTAL
             ),
             "install_path": (
-                os.fspath(install_path) if (installed or partial) and install_path else None
+                os.fspath(install_path)
+                if (installed or partial or storage_unavailable) and install_path
+                else None
             ),
             "executable": os.fspath(executable) if executable else None,
             "installed_version": self._installed_game_version(install_path) if installed else None,
             "official_client_installed": official_client_installed,
             "native_steam_app_id": game.native_steam_app_id,
-            "storage_state": health.state if health is not None else "unknown",
+            "storage_state": (
+                "unavailable"
+                if storage_unavailable
+                else health.state
+                if health is not None
+                else "unknown"
+            ),
             "storage_filesystem": health.filesystem if health is not None else None,
         }
         if (
@@ -506,10 +788,38 @@ class HoYoPlayProvider(GameProvider):
         if not isinstance(raw_path, str):
             return None
         try:
-            path = Path(raw_path).expanduser().resolve()
+            path = Path(raw_path).expanduser().resolve(strict=False)
         except OSError:
             return None
-        return path if path.is_dir() else None
+        return path
+
+    def _remember_install_path(self, external_game_id: str, install_path: Path) -> None:
+        try:
+            payload = json.loads(self.retained_installations_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        resolved = os.fspath(install_path.expanduser().resolve())
+        if payload.get(external_game_id) == resolved:
+            return
+        payload[external_game_id] = resolved
+        try:
+            self.restore_retained_installations(payload)
+        except OSError:
+            return
+
+    @staticmethod
+    def _external_storage_unavailable(path: Path) -> bool:
+        parts = path.parts
+        mount: Path | None = None
+        if len(parts) >= 5 and parts[:3] == ("/", "run", "media"):
+            mount = Path(*parts[:5])
+        elif len(parts) >= 4 and parts[:2] == ("/", "media"):
+            mount = Path(*parts[:4])
+        elif len(parts) >= 3 and parts[:2] == ("/", "mnt"):
+            mount = Path(*parts[:3])
+        return mount is not None and not mount.is_dir()
 
     def retained_installations(self) -> JsonObject:
         retained: JsonObject = {}
@@ -758,6 +1068,11 @@ class HoYoPlayProvider(GameProvider):
             raise ValueError("hoyoplay.unsupported_channel")
         directory = self._installed_game_directory(external_game_id)
         current_config, _current = self._read_channel_config(directory)
+        if channel == "official":
+            self._prepare_default_official_profile(
+                external_game_id, directory, current_config
+            )
+            return self.channel_profile_status(external_game_id)
         metadata = self._channel_sdk_metadata(external_game_id, channel)
         package = metadata.get("channel_sdk_pkg", {})
         url = str(package.get("url", ""))
@@ -822,6 +1137,62 @@ class HoYoPlayProvider(GameProvider):
             os.replace(staged, profile)
         return self.channel_profile_status(external_game_id)
 
+    @staticmethod
+    def _channel_component_files(directory: Path) -> list[Path]:
+        """Find channel-specific files, including Bilibili's nested platform bundle."""
+        found: dict[str, Path] = {}
+        for name in _CHANNEL_COMPONENTS:
+            candidates = [directory / name]
+            candidates.extend(directory.glob(f"*_Data/Plugins/**/{name}"))
+            for source in candidates:
+                if source.is_file() and not source.is_symlink():
+                    found[source.relative_to(directory).as_posix()] = source
+        for platform in directory.glob("*_Data/Plugins/**/BLPlatform64"):
+            if not platform.is_dir() or platform.is_symlink():
+                continue
+            for source in platform.rglob("*"):
+                if source.is_file() and not source.is_symlink():
+                    found[source.relative_to(directory).as_posix()] = source
+        return [found[name] for name in sorted(found)]
+
+    def _prepare_default_official_profile(
+        self, external_game_id: str, directory: Path, current_config: bytes
+    ) -> None:
+        """Build the default CN profile locally; it has no downloadable channel SDK."""
+        text = self._normalize_channel_config(current_config, "official").decode("utf-8")
+        text = re.sub(
+            r"(?mi)^sdk_version[ \t]*=[^\r\n]*(?:\r?\n|$)", "", text
+        )
+        profile = self._profile_directory(external_game_id, "official")
+        staged = profile.with_name(profile.name + ".new")
+        if staged.exists():
+            shutil.rmtree(staged)
+        staged.mkdir(parents=True)
+        (staged / "config.ini").write_bytes(text.encode("utf-8"))
+        components = staged / "components"
+        components.mkdir()
+        retained: list[str] = []
+        # The official Genshin snapshot includes a channel-neutral licence file.
+        # Preserve it when it exists; Bilibili SDK binaries are deliberately omitted.
+        for source in self._channel_component_files(directory):
+            if source.name.casefold() != "license.txt":
+                continue
+            relative = source.relative_to(directory)
+            destination = components / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+            retained.append(relative.as_posix())
+        (staged / "manifest.json").write_text(
+            json.dumps(
+                {"channel": "official", "components": retained},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        if profile.exists():
+            shutil.rmtree(profile)
+        os.replace(staged, profile)
+
     def capture_channel_profile(self, external_game_id: str) -> JsonObject:
         if self.provider_id != "mihoyo_cn":
             raise ValueError("hoyoplay.channel_switch_cn_only")
@@ -838,18 +1209,12 @@ class HoYoPlayProvider(GameProvider):
         captured: list[str] = []
         components = staged_profile / "components"
         components.mkdir()
-        for name in _CHANNEL_COMPONENTS:
-            candidates = [directory / name]
-            candidates.extend(directory.glob(f"*_Data/Plugins/{name}"))
-            for source in candidates:
-                if not source.is_file() or source.is_symlink():
-                    continue
-                relative = source.relative_to(directory)
-                destination = components / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, destination)
-                captured.append(relative.as_posix())
-                break
+        for source in self._channel_component_files(directory):
+            relative = source.relative_to(directory)
+            destination = components / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+            captured.append(relative.as_posix())
         (staged_profile / "manifest.json").write_text(
             json.dumps({"channel": channel, "components": captured}, ensure_ascii=False),
             encoding="utf-8",

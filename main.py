@@ -42,6 +42,9 @@ class Plugin:
     async def prepare_hoyoplay_game_runtime(self, game_id: str) -> dict[str, str]:
         return await self.app.prepare_hoyoplay_game_runtime(game_id)
 
+    async def claim_steam_install_request(self, app_id: int) -> dict[str, bool]:
+        return self.app.claim_steam_install_request(app_id)
+
     async def list_providers(self) -> list[dict[str, object]]:
         return self.app.providers.summaries()
 
@@ -284,6 +287,11 @@ class Plugin:
         self, preset: str, provider_id: str, external_game_id: str
     ) -> str:
         return self.app.shortcut_launch_preset(preset, provider_id, external_game_id)
+
+    async def shortcut_profile_launch_preset(
+        self, preset: str, base: str, mode: str
+    ) -> str:
+        return self.app.shortcut_profile_launch_preset(preset, base, mode)
 
     async def launch_modifier_availability(self) -> dict[str, bool]:
         plugin_root = os.path.join(decky.DECKY_USER_HOME, "homebrew", "plugins")

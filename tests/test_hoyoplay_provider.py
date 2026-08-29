@@ -1,7 +1,7 @@
+import hashlib
 import json
 import os
 import sqlite3
-import hashlib
 import zipfile
 from io import BytesIO
 from types import SimpleNamespace
@@ -10,6 +10,7 @@ import pytest
 
 from gamebridge.models import GameReference
 from gamebridge.providers.hoyoplay import HOYOPLAY_GLOBAL, MIHOYO_CN, HoYoPlayProvider
+from gamebridge.storage import StorageRoot
 
 
 @pytest.mark.asyncio
@@ -107,6 +108,200 @@ async def test_provider_resolves_launcher_installed_on_mapped_external_drive(tmp
         GameReference("mihoyo_cn", "launcher", "miHoYo Launcher", "cn")
     )
     assert profile.executable == os.fspath(executable)
+
+
+def test_fresh_launcher_discovers_restored_games_and_recovers_official_channel(tmp_path):
+    provider = HoYoPlayProvider(
+        tmp_path / "providers/mihoyo-cn", tmp_path / "compatibility", MIHOYO_CN
+    )
+    launcher_root = tmp_path / "Game/miHoYo Launcher"
+    launcher = launcher_root / "launcher.exe"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_bytes(b"MZ")
+    provider._remember_launcher_executable(launcher)
+
+    game = launcher_root / "games/Star Rail Game"
+    component = game / "PCGameSDK.dll"
+    game.mkdir(parents=True)
+    (game / "StarRail.exe").write_bytes(b"MZ")
+    (game / "config.ini").write_text(
+        "[General]\ngame_version=4.5.0\nchannel=14\nsub_channel=0\n"
+        "cps=hyp_mihoyo\nsdk_version=5.0.4\n",
+        encoding="utf-8",
+    )
+    component.write_bytes(b"bilibili-sdk")
+
+    result = provider.prepare_launcher_game_association()
+
+    assert result["discovered"] == {"hkrpg_cn": os.fspath(game.resolve())}
+    assert result["repaired"] == ["hkrpg_cn"]
+    restored = (game / "config.ini").read_text(encoding="utf-8")
+    assert "channel=1" in restored
+    assert "sub_channel=1" in restored
+    assert "sdk_version=" not in restored
+    assert not component.exists()
+    profile = provider.channel_profiles_directory / "hkrpg_cn/bilibili"
+    assert (profile / "components/PCGameSDK.dll").read_bytes() == b"bilibili-sdk"
+    assert provider.game_installation("hkrpg_cn")["installed"] is True
+
+
+def test_fresh_launcher_recovers_old_official_config_with_bilibili_sdk_residue(tmp_path):
+    provider = HoYoPlayProvider(
+        tmp_path / "providers/mihoyo-cn", tmp_path / "compatibility", MIHOYO_CN
+    )
+    launcher_root = tmp_path / "Game/miHoYo Launcher"
+    launcher = launcher_root / "launcher.exe"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_bytes(b"MZ")
+    provider._remember_launcher_executable(launcher)
+
+    game = launcher_root / "games/Genshin Impact Game"
+    component = game / "YuanShen_Data/Plugins/BLPlatform64/PCGamePlatform.exe"
+    component.parent.mkdir(parents=True)
+    component.write_bytes(b"bilibili-platform")
+    (game / "YuanShen.exe").write_bytes(b"MZ")
+    original = (
+        b"[General]\ngame_version=7.0.0\nchannel=1\nsub_channel=1\n"
+        b"cps=hyp_mihoyo\nsdk_version=5.0.4\n"
+    )
+    (game / "config.ini").write_bytes(original)
+
+    result = provider.prepare_launcher_game_association()
+
+    assert result["repaired"] == ["hk4e_cn"]
+    restored = (game / "config.ini").read_text(encoding="utf-8")
+    assert "channel=1" in restored
+    assert "sub_channel=1" in restored
+    assert "sdk_version=" not in restored
+    assert not component.exists()
+    b_profile = provider.channel_profiles_directory / "hk4e_cn/bilibili"
+    assert "channel=14" in (b_profile / "config.ini").read_text(encoding="utf-8")
+    assert (
+        b_profile
+        / "components/YuanShen_Data/Plugins/BLPlatform64/PCGamePlatform.exe"
+    ).read_bytes() == b"bilibili-platform"
+    assert (
+        provider.data_directory
+        / "association-recovery/hk4e_cn/config.ini.before-recovery"
+    ).read_bytes() == original
+
+
+def test_adjacent_discovery_ignores_ambiguous_or_symlinked_game_directories(tmp_path):
+    provider = HoYoPlayProvider(
+        tmp_path / "providers/mihoyo-cn", tmp_path / "compatibility", MIHOYO_CN
+    )
+    launcher_root = tmp_path / "Game/miHoYo Launcher"
+    launcher = launcher_root / "launcher.exe"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_bytes(b"MZ")
+    provider._remember_launcher_executable(launcher)
+    for name in ("Star Rail Game", "Star Rail Copy"):
+        directory = launcher_root / "games" / name
+        directory.mkdir(parents=True)
+        (directory / "StarRail.exe").write_bytes(b"MZ")
+    linked = launcher_root / "games/Genshin Link"
+    target = tmp_path / "elsewhere/Genshin"
+    target.mkdir(parents=True)
+    (target / "YuanShen.exe").write_bytes(b"MZ")
+    linked.symlink_to(target, target_is_directory=True)
+
+    assert provider.discover_adjacent_installations() == {}
+
+
+@pytest.mark.asyncio
+async def test_provider_finds_launcher_after_drive_letter_or_mount_name_changes(
+    tmp_path, monkeypatch
+):
+    provider = HoYoPlayProvider(
+        tmp_path / "providers/mihoyo-cn", tmp_path / "compatibility", MIHOYO_CN
+    )
+    missing_disk = tmp_path / "old-label"
+    current_disk = tmp_path / "any-user" / "Game Disk"
+    executable = current_disk / "miHoYo Launcher" / "launcher.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"MZ")
+    dosdevices = provider.prefix_directory / "dosdevices"
+    dosdevices.mkdir(parents=True)
+    (dosdevices / "q:").symlink_to(missing_disk, target_is_directory=True)
+    (provider.prefix_directory / "system.reg").write_text(
+        '[Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\HYP_1_1_cn]\n'
+        '"ExeName"="launcher.exe"\n'
+        '"GameBiz"="hyp_cn"\n'
+        '"InstallPath"="Q:\\\\miHoYo Launcher"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "gamebridge.providers.hoyoplay.storage_roots",
+        lambda: [StorageRoot(current_disk, "/dev/test")],
+    )
+
+    status = await provider.connection_status()
+
+    assert status["state"] == "installed"
+    assert status["executable"] == os.fspath(executable)
+    assert provider.retained_launcher_path.read_text(encoding="utf-8") == os.fspath(
+        executable.resolve()
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_reports_disconnected_launcher_disk_instead_of_reinstall(
+    tmp_path, monkeypatch
+):
+    provider = HoYoPlayProvider(
+        tmp_path / "providers/mihoyo-cn", tmp_path / "compatibility", MIHOYO_CN
+    )
+    missing_disk = tmp_path / "disconnected"
+    dosdevices = provider.prefix_directory / "dosdevices"
+    dosdevices.mkdir(parents=True)
+    (dosdevices / "q:").symlink_to(missing_disk, target_is_directory=True)
+    (provider.prefix_directory / "system.reg").write_text(
+        '[Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Uninstall\\\\HYP_1_1_cn]\n'
+        '"ExeName"="launcher.exe"\n'
+        '"GameBiz"="hyp_cn"\n'
+        '"InstallPath"="Q:\\\\miHoYo Launcher"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("gamebridge.providers.hoyoplay.storage_roots", lambda: [])
+
+    status = await provider.connection_status()
+
+    assert status["state"] == "storage_unavailable"
+    assert status["action"] == "wait_for_storage"
+    assert status["message"] == "hoyoplay.launcher_storage_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_provider_supports_launcher_and_games_on_different_disks(tmp_path):
+    provider = HoYoPlayProvider(
+        tmp_path / "providers/mihoyo-cn", tmp_path / "compatibility", MIHOYO_CN
+    )
+    launcher_disk = tmp_path / "Game"
+    game_disk = tmp_path / "another-label"
+    launcher = launcher_disk / "miHoYo Launcher" / "launcher.exe"
+    game = game_disk / "miHoYo Launcher" / "games" / "Star Rail Game"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_bytes(b"MZ")
+    game.mkdir(parents=True)
+    (game / "StarRail.exe").write_bytes(b"MZ")
+    provider.retained_launcher_path.parent.mkdir(parents=True)
+    provider.retained_launcher_path.write_text(os.fspath(launcher), encoding="utf-8")
+    dosdevices = provider.prefix_directory / "dosdevices"
+    dosdevices.mkdir(parents=True)
+    (dosdevices / "g:").symlink_to(game_disk, target_is_directory=True)
+    (provider.prefix_directory / "user.reg").write_text(
+        '[Software\\\\miHoYo\\\\HYP\\\\1_1\\\\hkrpg_cn]\n'
+        '"GameInstallPath"="G:\\\\miHoYo Launcher\\\\games\\\\Star Rail Game"\n',
+        encoding="utf-8",
+    )
+
+    status = await provider.connection_status()
+    installation = provider.game_installation("hkrpg_cn")
+
+    assert status["state"] == "installed"
+    assert status["executable"] == os.fspath(launcher.resolve())
+    assert installation["installed"] is True
+    assert installation["install_path"] == os.fspath(game.resolve())
 
 
 def test_provider_ignores_unrelated_or_escaping_registry_install_paths(tmp_path):
@@ -480,6 +675,63 @@ def test_provider_preserves_current_official_profile_before_first_bilibili_switc
     assert "YuanShen_Data/Plugins/PCGameSDK.dll" in (
         official / "manifest.json"
     ).read_text(encoding="utf-8")
+
+
+def test_provider_recovers_default_official_profile_from_bilibili_only_install(
+    tmp_path, monkeypatch
+):
+    provider = HoYoPlayProvider(
+        tmp_path / "providers/mihoyo-cn", tmp_path / "compatibility", MIHOYO_CN
+    )
+    game_directory = tmp_path / "Genshin"
+    plugin_directory = game_directory / "YuanShen_Data/Plugins"
+    platform_directory = plugin_directory / "BLPlatform64"
+    platform_directory.mkdir(parents=True)
+    (game_directory / "YuanShen.exe").write_bytes(b"MZ")
+    config = game_directory / "config.ini"
+    config.write_text(
+        "[General]\ngame_version=7.0.0\nchannel=14\nsub_channel=0\n"
+        "cps=hyp_mihoyo\nsdk_version=5.0.4\n",
+        encoding="utf-8",
+    )
+    sdk = plugin_directory / "PCGameSDK.dll"
+    sdk.write_bytes(b"bilibili-sdk")
+    licence = plugin_directory / "license.txt"
+    licence.write_bytes(b"shared-licence")
+    platform = platform_directory / "PCGamePlatform.exe"
+    platform.write_bytes(b"bilibili-platform")
+    (game_directory / "sdk_pkg_version").write_bytes(b"bilibili-version")
+    provider.game_installation = lambda _game_id, **_kwargs: {
+        "installed": True,
+        "install_path": os.fspath(game_directory),
+    }
+    monkeypatch.setattr(
+        provider,
+        "_channel_sdk_metadata",
+        lambda *_args: pytest.fail("official profile must not request a channel SDK"),
+    )
+
+    status = provider.switch_channel_profile("hk4e_cn", "official")
+
+    assert status["current"] == "official"
+    assert status["official_ready"] is True
+    assert status["bilibili_ready"] is True
+    official_text = config.read_text(encoding="utf-8")
+    assert "game_version=7.0.0" in official_text
+    assert "channel=1" in official_text
+    assert "sub_channel=1" in official_text
+    assert "sdk_version=" not in official_text
+    assert not sdk.exists()
+    assert not platform.exists()
+    assert not (game_directory / "sdk_pkg_version").exists()
+    assert licence.read_bytes() == b"shared-licence"
+
+    provider.switch_channel_profile("hk4e_cn", "bilibili")
+
+    assert "channel=14" in config.read_text(encoding="utf-8")
+    assert sdk.read_bytes() == b"bilibili-sdk"
+    assert platform.read_bytes() == b"bilibili-platform"
+    assert (game_directory / "sdk_pkg_version").read_bytes() == b"bilibili-version"
 
 
 def test_capture_channel_profile_replaces_stale_component_snapshot(tmp_path):

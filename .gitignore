@@ -14,6 +14,11 @@ __pycache__/
 releases/
 .codex/
 AGENTS.md
+!.codex/
+!.codex/skills/
+!.codex/skills/gamebridge-regression-guard/
+!.codex/skills/gamebridge-regression-guard/**
+!AGENTS.md
 docs/bilibili-reply-drafts-*.md
 docs/community-reply-style.md
 docs/mihoyo-provider-project-plan.md

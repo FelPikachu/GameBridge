@@ -1,0 +1,6 @@
+interface:
+  display_name: "GameBridge 回退保护"
+  short_description: "保护已验收平台、启动链与单项功能"
+  default_prompt: "Use $gamebridge-regression-guard to change GameBridge without regressing accepted behavior."
+policy:
+  allow_implicit_invocation: true

@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from gamebridge.providers.hoyoplay import (  # noqa: E402, I001
 from gamebridge.storage import (  # noqa: E402, I001
     StorageRoot,
     ensure_wine_storage_drive,
+    steam_library_paths,
 )
 
 
@@ -38,6 +40,9 @@ LANGUAGE_ENVIRONMENTS = {
     "zh-CN": {"LANG": "zh_CN.UTF-8", "LANGUAGE": "zh_CN:zh", "LC_ALL": "zh_CN.UTF-8"},
     "zh-TW": {"LANG": "zh_TW.UTF-8", "LANGUAGE": "zh_TW:zh", "LC_ALL": "zh_TW.UTF-8"},
 }
+
+PROTON_HOTFIX_APP_ID = 2180100
+PROTON_HOTFIX_INSTALL_TIMEOUT_SECONDS = 30 * 60
 
 
 def _split_glued_modifiers(tokens: list[str]) -> list[str]:
@@ -114,6 +119,43 @@ def _apply_lsfg_paths(environment: dict[str, str], user_home: Path) -> None:
         # user's data directory. GameBridge keeps HOME isolated for Legendary,
         # so explicitly expose that XDG location to the Vulkan loader.
         environment["XDG_DATA_HOME"] = os.fspath(user_home / ".local" / "share")
+
+
+def _prepare_isolated_steam_home(isolated_home: Path, user_home: Path) -> None:
+    """Expose Steam's native client libraries inside Legendary's isolated HOME."""
+    isolated_steam = isolated_home / ".steam"
+    candidates = {
+        "sdk32": (
+            user_home / ".steam/sdk32",
+            user_home / ".local/share/Steam/linux32",
+            user_home / ".steam/root/linux32",
+        ),
+        "sdk64": (
+            user_home / ".steam/sdk64",
+            user_home / ".local/share/Steam/linux64",
+            user_home / ".steam/root/linux64",
+        ),
+    }
+    for name, sources in candidates.items():
+        source = next(
+            (
+                candidate.resolve()
+                for candidate in sources
+                if (candidate / "steamclient.so").is_file()
+            ),
+            None,
+        )
+        if source is None:
+            continue
+        destination = isolated_steam / name
+        if destination.is_symlink() and destination.resolve() == source:
+            continue
+        isolated_steam.mkdir(parents=True, exist_ok=True)
+        if os.path.lexists(destination):
+            if not destination.is_symlink():
+                continue
+            destination.unlink()
+        destination.symlink_to(source, target_is_directory=True)
 
 
 def _recover_embedded_lsfg(
@@ -319,14 +361,85 @@ def _bh3_runtime(
     return None
 
 
+def _bh3_global_runtime(
+    compatibility: CompatibilityManager,
+) -> tuple[str, Path] | None:
+    """Return Valve's current hotfix for the international BH3 client."""
+    for name, path in compatibility.proton_layers():
+        names = {name, path.name}
+        if any(
+            re.sub(r"[^a-z0-9]+", "", candidate.casefold()) == "protonhotfix"
+            for candidate in names
+        ):
+            return name, path
+    return None
+
+
+def _install_bh3_global_runtime(
+    compatibility: CompatibilityManager,
+    root_data: Path,
+    *,
+    timeout_seconds: float = PROTON_HOTFIX_INSTALL_TIMEOUT_SECONDS,
+    poll_seconds: float = 2,
+) -> tuple[str, Path] | None:
+    """Ask Steam to install Proton Hotfix, then wait for the managed download."""
+    runtime = _bh3_global_runtime(compatibility)
+    if runtime is not None:
+        return runtime
+    steam = shutil.which("steam")
+    if steam is None:
+        return None
+    request_file = root_data / "compatibility" / "steam-install-request.json"
+    request_file.parent.mkdir(parents=True, exist_ok=True)
+    staged = request_file.with_suffix(".new")
+    staged.write_text(
+        json.dumps(
+            {
+                "appId": PROTON_HOTFIX_APP_ID,
+                "requestedAt": time.time(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.replace(staged, request_file)
+    try:
+        subprocess.Popen(  # noqa: S603 -- fixed Steam binary and fixed app ID
+            [steam, f"steam://install/{PROTON_HOTFIX_APP_ID}"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            runtime = _bh3_global_runtime(compatibility)
+            if runtime is not None:
+                return runtime
+            time.sleep(poll_seconds)
+        return None
+    finally:
+        request_file.unlink(missing_ok=True)
+
+
 def _hoyoplay_launch_prefix(
     provider_prefix: Path,
     provider_id: str,
     steam_app_id: int | None,
     *,
+    game_id: str | None = None,
     uses_game_runtime: bool = False,
 ) -> Path:
-    if provider_id == "mihoyo_cn" and uses_game_runtime and steam_app_id is not None:
+    if provider_id == "hoyoplay_global" and uses_game_runtime and game_id is not None:
+        # The launcher keeps its own Prefix, while every global game receives
+        # a separate environment. This prevents DWProton and GE-Proton from
+        # repeatedly upgrading the same Prefix when users switch games.
+        return provider_prefix.parent / "prefixes" / "hoyoplay-global" / game_id
+    if (
+        provider_id == "mihoyo_cn"
+        and game_id != "nap_cn"
+        and uses_game_runtime
+        and steam_app_id is not None
+    ):
         return (
             Path.home()
             / ".local/share/Steam/steamapps/compatdata"
@@ -341,7 +454,8 @@ def _hoyoplay_umu_id(provider_id: str, game_id: str) -> str:
         return "umu-default"
     # These standalone IDs are published by ProtonFixes. Using umu-default
     # identifies the executables as unknown games and skips their maintained
-    # compatibility environment.
+    # compatibility environment. DWProton identifies the CN executable itself;
+    # keeping its historical default ID is part of the verified 0.18.165 route.
     return {
         "hk4e_global": "umu-genshin",
         "nap_global": "umu-zenlesszonezero",
@@ -380,7 +494,7 @@ def _hoyoplay_uses_nested_steam_proton(provider_id: str, game_id: str) -> bool:
     """Use Steam's proven direct-Proton path only for standalone game EXEs."""
     return (
         provider_id == "mihoyo_cn"
-        and game_id in {"hk4e_cn", "nap_cn", "hkrpg_cn", "bh3_cn"}
+        and game_id in {"hk4e_cn", "hkrpg_cn", "bh3_cn"}
     ) or (provider_id == "hoyoplay_global" and game_id == "bh3_global")
 
 
@@ -432,13 +546,15 @@ def _steam_proton_command(
     executable: Path,
     arguments: list[str] | None = None,
 ) -> list[str]:
-    entry = (
-        Path.home()
-        / ".local/share/Steam/steamapps/common/SteamLinuxRuntime_4/_v2-entry-point"
-    )
+    entries = _steam_runtime_entry_points(Path.home())
     proton = runtime_path / "proton"
-    if not entry.is_file() or not proton.is_file():
-        raise FileNotFoundError("Steam Proton runtime is incomplete")
+    if not proton.is_file() or not os.access(proton, os.X_OK):
+        raise FileNotFoundError(f"Proton executable is unavailable: {proton}")
+    if not entries:
+        raise FileNotFoundError(
+            "No usable Steam Linux Runtime was found in the registered Steam libraries"
+        )
+    entry = entries[0]
     return [
         os.fspath(entry),
         "--verb=waitforexitandrun",
@@ -448,6 +564,64 @@ def _steam_proton_command(
         os.fspath(executable),
         *(arguments or []),
     ]
+
+
+def _steam_runtime_entry_points(user_home: Path) -> list[Path]:
+    """Find compatible containers managed by UMU or a registered Steam library."""
+    found: dict[Path, Path] = {}
+    umu_root = user_home / ".local/share/umu"
+    if umu_root.is_dir():
+        for entry in umu_root.glob("*/_v2-entry-point"):
+            if (
+                _steam_runtime_is_compatible(entry)
+                and entry.is_file()
+                and os.access(entry, os.X_OK)
+            ):
+                try:
+                    resolved = entry.resolve()
+                except OSError:
+                    continue
+                found.setdefault(resolved, resolved)
+
+    steam_roots = [
+        user_home / ".local/share/Steam",
+        user_home / ".steam/root",
+        *steam_library_paths(user_home),
+    ]
+    for steam_root in steam_roots:
+        common = steam_root / "steamapps/common"
+        if not common.is_dir():
+            continue
+        for entry in common.glob("SteamLinuxRuntime*/_v2-entry-point"):
+            if (
+                not _steam_runtime_is_compatible(entry)
+                or not entry.is_file()
+                or not os.access(entry, os.X_OK)
+            ):
+                continue
+            try:
+                resolved = entry.resolve()
+            except OSError:
+                continue
+            found.setdefault(resolved, resolved)
+
+    def rank(entry: Path) -> tuple[int, str]:
+        name = entry.parent.name.casefold()
+        if name in {"steamrt4", "steamlinuxruntime_4"}:
+            priority = 0
+        elif "sniper" in name:
+            priority = 1
+        else:
+            priority = 2
+        return priority, os.fspath(entry).casefold()
+
+    return sorted(found.values(), key=rank)
+
+
+def _steam_runtime_is_compatible(entry: Path) -> bool:
+    """Reject old containers whose Python cannot start GameBridge's Proton 11 tools."""
+    name = entry.parent.name.casefold()
+    return name in {"steamrt4", "steamlinuxruntime_4"} or "sniper" in name
 
 
 def _steam_compat_data_path(launch_prefix: Path) -> Path:
@@ -496,6 +670,7 @@ def main() -> int:
             root_data / "compatibility",
             spec,
         )
+        provider.prepare_launcher_game_association()
         if arguments.game_id not in {"installer", "launcher"}:
             provider.repair_completed_install_metadata(arguments.game_id)
             if arguments.provider == "mihoyo_cn":
@@ -542,25 +717,32 @@ def main() -> int:
             provider.prefix_directory,
             arguments.provider,
             steam_app_id,
+            game_id=arguments.game_id,
             uses_game_runtime=uses_game_runtime,
         )
         _ensure_hoyoplay_game_drive(launch_prefix, executable)
         try:
             if not compatibility.umu_executable.is_file():
                 compatibility.prepare()
-            if arguments.game_id not in {"installer", "launcher"}:
+            if arguments.game_id not in {"installer", "launcher", "bh3_global"}:
                 compatibility.ensure_hoyoplay_runtime(arguments.game_id)
             selected_game = (
                 arguments.game_id if uses_game_runtime else "launcher"
             )
             runtime = None
-            if uses_game_runtime and arguments.game_id in {"bh3_cn", "bh3_global"}:
+            if uses_game_runtime and arguments.game_id == "bh3_global":
+                runtime = _install_bh3_global_runtime(
+                    compatibility, root_data
+                )
+                if runtime is None:
+                    raise RuntimeError("Proton Hotfix installation did not complete")
+            elif uses_game_runtime and arguments.game_id == "bh3_cn":
                 runtime = _bh3_runtime(compatibility)
             elif _hoyoplay_uses_shared_dwproton(arguments.provider):
                 runtime = _newest_dwproton(compatibility)
             elif selected_game != "launcher":
                 runtime = (
-                    _bh3_runtime(compatibility)
+                    _bh3_global_runtime(compatibility)
                     if arguments.provider == "hoyoplay_global"
                     and arguments.game_id == "bh3_global"
                     else _newest_dwproton(compatibility)
@@ -576,6 +758,7 @@ def main() -> int:
             and arguments.game_id == "bh3_global"
         )
         environment = os.environ.copy()
+        umu_id = _hoyoplay_umu_id(arguments.provider, arguments.game_id)
         environment.update(
             {
                 "WINEPREFIX": os.fspath(
@@ -583,7 +766,11 @@ def main() -> int:
                         launch_prefix, arguments.provider, arguments.game_id
                     )
                 ),
-                "GAMEID": _hoyoplay_umu_id(arguments.provider, arguments.game_id),
+                "GAMEID": umu_id,
+                # UMU translates GAMEID to UMU_ID before Proton starts. The
+                # direct Steam-Proton route bypasses that translation, so pass
+                # both names to keep ProtonFixes game detection intact.
+                "UMU_ID": umu_id,
                 "STORE": "none",
                 "PROTONPATH": os.fspath(runtime_path),
                 "UMU_LOG": "1",
@@ -627,9 +814,21 @@ def main() -> int:
                 )
                 and isinstance(runtime_path, Path)
             ):
-                command = _steam_proton_command(
-                    runtime_path, executable, arguments=launcher_arguments
-                )
+                try:
+                    command = _steam_proton_command(
+                        runtime_path, executable, arguments=launcher_arguments
+                    )
+                except FileNotFoundError as exc:
+                    _write_log(
+                        log_directory,
+                        f"direct runtime unavailable: {exc}; falling back to UMU",
+                    )
+                    command = _official_client_command(
+                        compatibility.umu_executable,
+                        executable,
+                        inhibit_sleep=partial_download,
+                        arguments=launcher_arguments,
+                    )
             else:
                 command = _official_client_command(
                     compatibility.umu_executable,
@@ -662,7 +861,7 @@ def main() -> int:
         return 3
     compatibility = CompatibilityManager(root_data / "compatibility")
     try:
-        if not compatibility.umu_executable.is_file():
+        if not compatibility.status()["ready"]:
             compatibility.prepare()
         installed_file = data_directory / "config" / "legendary" / "installed.json"
         installations = json.loads(installed_file.read_text(encoding="utf-8"))
@@ -675,6 +874,7 @@ def main() -> int:
         )
         prefix = compatibility.prefix("epic", arguments.game_id)
         prefix.mkdir(parents=True, exist_ok=True)
+        _prepare_isolated_steam_home(data_directory, user_home)
     except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
         _write_log(root_data / "compatibility" / "logs", f"prepare failed: {exc}")
         return 4

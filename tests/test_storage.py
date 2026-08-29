@@ -25,7 +25,7 @@ def test_storage_roots_are_dynamic_and_not_tied_to_deck_username(tmp_path, monke
         "mounted_filesystems",
         lambda: [(tmp_path, "/dev/internal"), (external, "/dev/mmcblk0p1")],
     )
-    monkeypatch.setattr(storage, "_steam_library_paths", lambda _home: [external / "SteamLibrary"])
+    monkeypatch.setattr(storage, "steam_library_paths", lambda _home: [external / "SteamLibrary"])
 
     roots = storage.storage_roots(home)
 
@@ -87,3 +87,44 @@ def test_wine_storage_drive_maps_largest_external_root_before_prefix_exists(
 def test_storage_health_reports_missing_path_as_unavailable(tmp_path):
     health = storage.storage_health(tmp_path / "missing", tmp_path / "missing-mountinfo")
     assert health.state == "unavailable"
+
+
+def test_wine_storage_drive_repairs_only_a_dangling_mapping(tmp_path):
+    old_disk = tmp_path / "old-disk"
+    new_disk = tmp_path / "new-disk"
+    new_disk.mkdir()
+    prefix = tmp_path / "prefix"
+    dosdevices = prefix / "dosdevices"
+    dosdevices.mkdir(parents=True)
+    game_drive = dosdevices / "g:"
+    game_drive.symlink_to(old_disk, target_is_directory=True)
+
+    selected = storage.ensure_wine_storage_drive(
+        prefix,
+        new_disk / "miHoYo Launcher/launcher.exe",
+        [StorageRoot(new_disk, "new")],
+    )
+
+    assert selected == new_disk.resolve()
+    assert game_drive.resolve() == new_disk.resolve()
+
+
+def test_wine_storage_drive_keeps_a_working_game_disk_mapping(tmp_path):
+    launcher_disk = tmp_path / "launcher-disk"
+    game_disk = tmp_path / "game-disk"
+    launcher_disk.mkdir()
+    game_disk.mkdir()
+    prefix = tmp_path / "prefix"
+    dosdevices = prefix / "dosdevices"
+    dosdevices.mkdir(parents=True)
+    game_drive = dosdevices / "g:"
+    game_drive.symlink_to(game_disk, target_is_directory=True)
+
+    selected = storage.ensure_wine_storage_drive(
+        prefix,
+        launcher_disk / "miHoYo Launcher/launcher.exe",
+        [StorageRoot(launcher_disk, "launcher"), StorageRoot(game_disk, "games")],
+    )
+
+    assert selected is None
+    assert game_drive.resolve() == game_disk.resolve()

@@ -47,6 +47,82 @@ def test_compatibility_resolves_umu_id_then_falls_back(tmp_path):
     assert manager.umu_id("unknown", "Missing") == "umu-default"
 
 
+def test_compatibility_finds_proton_in_external_steam_library(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    library = tmp_path / "external" / "SteamLibrary"
+    proton = library / "steamapps/common/Proton Hotfix/proton"
+    proton.parent.mkdir(parents=True)
+    proton.write_text("#!/bin/sh\n", encoding="utf-8")
+    proton.chmod(0o755)
+    monkeypatch.setattr("gamebridge.compatibility.Path.home", lambda: home)
+    monkeypatch.setattr(
+        "gamebridge.compatibility.steam_library_paths",
+        lambda current_home: [library] if current_home == home else [],
+    )
+
+    layers = CompatibilityManager(tmp_path / "data").proton_layers()
+
+    assert layers == [("Proton Hotfix", proton.parent.resolve())]
+
+
+def test_prepare_installs_umu_and_verified_default_runtime(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    manager = CompatibilityManager(tmp_path / "data")
+    installed: list[str] = []
+    monkeypatch.setattr("gamebridge.compatibility.Path.home", lambda: home)
+
+    def install_umu(target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.touch()
+        installed.append("umu")
+
+    def install_runtime(release, root):
+        proton = root / release.version / "proton"
+        proton.parent.mkdir(parents=True, exist_ok=True)
+        proton.touch()
+        proton.chmod(0o755)
+        installed.append(release.version)
+        return {"version": release.version, "path": os.fspath(proton.parent)}
+
+    monkeypatch.setattr(manager.installer, "install_umu", install_umu)
+    monkeypatch.setattr(manager.installer, "install_compatibility_tool", install_runtime)
+    monkeypatch.setattr(manager, "refresh_database", lambda: [])
+
+    status = manager.prepare()
+
+    assert installed == ["umu", GE_PROTON_RELEASE.version]
+    assert status["ready"] is True
+
+
+def test_status_does_not_treat_an_arbitrary_proton_as_prepared(tmp_path, monkeypatch):
+    manager = CompatibilityManager(tmp_path / "data")
+    monkeypatch.setattr("gamebridge.compatibility.Path.home", lambda: tmp_path / "home")
+    manager.umu_executable.parent.mkdir(parents=True)
+    manager.umu_executable.touch()
+    hotfix = tmp_path / "Proton Hotfix"
+    hotfix.mkdir()
+    monkeypatch.setattr(manager, "proton_layers", lambda: [("Proton Hotfix", hotfix)])
+
+    assert manager.status()["ready"] is False
+
+
+def test_verified_default_runtime_is_ranked_before_other_ge_builds(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    default = home / ".local/share/Steam/compatibilitytools.d" / GE_PROTON_RELEASE.version
+    older = home / ".local/share/Steam/compatibilitytools.d/GE-Proton10-1"
+    for runtime in (default, older):
+        runtime.mkdir(parents=True)
+        proton = runtime / "proton"
+        proton.touch()
+        proton.chmod(0o755)
+    monkeypatch.setattr("gamebridge.compatibility.Path.home", lambda: home)
+    monkeypatch.setattr("gamebridge.compatibility.steam_library_paths", lambda _home: [])
+
+    layers = CompatibilityManager(tmp_path / "data").proton_layers()
+
+    assert layers[0] == (GE_PROTON_RELEASE.version, default.resolve())
+
+
 def test_steam_per_game_compatibility_override_has_highest_priority(tmp_path, monkeypatch):
     manager = CompatibilityManager(tmp_path)
     ge = tmp_path / "GE-Proton10-34"
@@ -186,3 +262,26 @@ async def test_application_rejects_runtime_for_unknown_hoyoplay_game(tmp_path):
     application = GameBridgeApplication(tmp_path)
     with pytest.raises(ValueError, match="unsupported_hoyoplay_game"):
         await application.prepare_hoyoplay_game_runtime("unknown")
+
+
+def test_application_only_claims_fresh_matching_steam_install_request(
+    tmp_path, monkeypatch
+):
+    from gamebridge.application import GameBridgeApplication
+
+    application = GameBridgeApplication(tmp_path)
+    request = tmp_path / "compatibility/steam-install-request.json"
+    request.parent.mkdir(parents=True)
+    request.write_text(
+        json.dumps({"appId": 2180100, "requestedAt": 1000}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("gamebridge.application.time.time", lambda: 1050)
+
+    assert application.claim_steam_install_request(858280) == {"claimed": False}
+    assert request.exists()
+    assert application.claim_steam_install_request(2180100) == {"claimed": True}
+    assert not request.exists()
+
+    request.write_text("[]", encoding="utf-8")
+    assert application.claim_steam_install_request(2180100) == {"claimed": False}

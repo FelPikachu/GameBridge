@@ -47,6 +47,7 @@ const messages = {
     compatibilityRuntime: "Compatibility Runtime", umuRuntime: "Windows Game Runtime",
     runtimeReady: "Ready · {layer}", runtimeNotReady: "Not prepared",
     prepareCompatibility: "Prepare Compatibility Runtime", preparingCompatibility: "Preparing compatibility runtime…",
+    compatRestartTitle: "Restart Steam once", compatRestartDescription: "The required compatibility runtime has just been installed. Restart Steam once, then open this game again. This is only needed after the first installation.", restartSteam: "Restart Steam",
     artworkMetadata: "Artwork and Metadata", steamGridDbDescription: "First sign in through Steam, then open the API page and generate a key. The key stays on this device and can fetch community artwork for every platform.",
     steamGridDbDescriptionSimple: "Artwork is fetched automatically after a game is added. The API key stays on this device.", loginAndOpenSteamGridDbApi: "Sign in and open API page",
     steamGridDbArtwork: "SteamGridDB Artwork", steamGridDbLoginHint: "After signing in, the API page opens automatically. Paste the key once.", apiKeyPlaceholder: "Paste API Key", saveAndVerify: "Save and Verify", artworkSortHighestRated: "Artwork sorting: Highest rated",
@@ -65,6 +66,7 @@ const messages = {
     downloadAndInstallOfficial: "Download and install {provider}", downloadingOfficialInstaller: "Downloading the official installer…",
     installOfficialProvider: "Install {provider}",
     mihoyoCn: "miHoYo (China)", hoyoplayGlobal: "HoYoPlay (Global)", hoyoplayNotInstalled: "Official client not installed", hoyoplayInstalledLogin: "Sign in inside the official client",
+    launcherStorageUnavailable: "Launcher storage device is not connected", gameStorageUnavailable: "Game storage device is not connected",
   },
   zh: {
     libraryReadFailed: "Epic 游戏库读取失败：{error}", installed: "已安装", uninstallTitle: "卸载 {title}",
@@ -106,6 +108,7 @@ const messages = {
     compatibilityRuntime: "兼容运行环境", umuRuntime: "Windows 游戏运行环境",
     runtimeReady: "已就绪 · {layer}", runtimeNotReady: "尚未准备",
     prepareCompatibility: "准备兼容运行环境", preparingCompatibility: "正在准备兼容运行环境…",
+    compatRestartTitle: "需要重启一次 Steam", compatRestartDescription: "所需的兼容运行环境刚刚安装完成。重启 Steam 后再打开这款游戏即可，只需要这一次。", restartSteam: "重启 Steam",
     artworkMetadata: "封面与元数据", steamGridDbDescription: "先通过 Steam 登录，再打开 API 页面生成 Key。Key 只保存在本机，可为所有平台的游戏获取社区封面。",
     steamGridDbDescriptionSimple: "添加游戏后会自动获取素材，API Key 仅保存在本机。", loginAndOpenSteamGridDbApi: "登录并打开 API 页面",
     steamGridDbArtwork: "SteamGridDB 素材", steamGridDbLoginHint: "登录后自动跳转，只需粘贴一次 Key。", apiKeyPlaceholder: "粘贴 API Key", saveAndVerify: "保存并验证", artworkSortHighestRated: "素材排序：评分最高",
@@ -124,6 +127,7 @@ const messages = {
     downloadAndInstallOfficial: "下载并安装 {provider}", downloadingOfficialInstaller: "正在下载官方安装器…",
     installOfficialProvider: "安装 {provider}",
     mihoyoCn: "米哈游", hoyoplayGlobal: "HoYoPlay（国际服）", hoyoplayNotInstalled: "未安装官方客户端", hoyoplayInstalledLogin: "请在官方客户端内登录",
+    launcherStorageUnavailable: "米哈游启动器所在存储设备未连接", gameStorageUnavailable: "游戏所在存储设备未连接",
   },
   zht: {
     repairShortcut: "復原 GameBridge 啟動選項", repairShortcutTitle: "啟動選項已復原", repairShortcutDescription: "已復原 {title} 的執行檔、起始目錄和啟動選項。",
@@ -264,6 +268,7 @@ export function steamT(token: string, fallbackKey: LocaleKey, variables: Variabl
 const backendMessages: Record<string, LocaleKey> = {
   "epic.tool_missing": "epicToolMissing", "epic.connected": "connected", "epic.login_required": "epicLoginRequired", "epic.login_expired": "epicLoginExpired",
   "provider.mihoyo_cn": "mihoyoCn", "provider.hoyoplay_global": "hoyoplayGlobal", "hoyoplay.not_installed": "hoyoplayNotInstalled", "hoyoplay.installed_login_in_client": "hoyoplayInstalledLogin",
+  "hoyoplay.launcher_storage_unavailable": "launcherStorageUnavailable", "hoyoplay.game_storage_unavailable": "gameStorageUnavailable",
   "epic.login_corrupt": "epicLoginCorrupt", "error.invalid_auth_code": "invalidAuthCode", "error.epic_login_failed": "epicLoginFailed",
   "error.epic_uninstall_failed": "epicUninstallFailed", "error.epic_manifest_missing": "epicManifestMissing", "error.invalid_auth_json": "invalidAuthJson",
   "error.invalid_auth_format": "invalidAuthFormat", "provider.local_demo": "localDemo", "install.preparing": "phasePreparing", "install.downloading": "phaseDownloading",

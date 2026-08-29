@@ -9,6 +9,7 @@ import re
 import shutil
 import struct
 import subprocess
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -18,7 +19,11 @@ from .cloud_saves import EpicCloudSaveManager
 from .database import Database
 from .install import EpicInstallManager
 from .jobs import InstallJobStore
-from .launch_options import preset_launch_options, repair_launch_options
+from .launch_options import (
+    preset_launch_options,
+    repair_launch_options,
+    shortcut_profile_launch_options,
+)
 from .models import GameReference, JobState, RuntimeProfile
 from .official_artwork import OfficialLauncherArtworkResolver
 from .play_history import (
@@ -286,6 +291,10 @@ class GameBridgeApplication:
         return preset_launch_options(preset, provider_id, game_id)
 
     @staticmethod
+    def shortcut_profile_launch_preset(preset: str, base: str, mode: str) -> str:
+        return shortcut_profile_launch_options(preset, base, mode)
+
+    @staticmethod
     def launch_modifier_availability(plugin_directory: str | Path) -> dict[str, bool]:
         root = Path(plugin_directory)
         try:
@@ -308,6 +317,14 @@ class GameBridgeApplication:
                     str(summary["id"]), resolve_artwork=False
                 )
         providers = self.providers.summaries()
+        with self.database.connect() as db:
+            provider_game_counts = {
+                str(row["provider_id"]): int(row["game_count"])
+                for row in db.execute(
+                    "SELECT provider_id, COUNT(*) AS game_count "
+                    "FROM game_releases GROUP BY provider_id"
+                ).fetchall()
+            }
         provider_statuses = []
         for provider in providers:
             instance = self.providers.get(str(provider["id"]))
@@ -316,7 +333,13 @@ class GameBridgeApplication:
                 if isinstance(instance, EpicProvider)
                 else await instance.connection_status()
             )
-            provider_statuses.append({**provider, "status": status})
+            provider_statuses.append(
+                {
+                    **provider,
+                    "gameCount": provider_game_counts.get(str(provider["id"]), 0),
+                    "status": status,
+                }
+            )
         with self.database.connect() as db:
             game_count = db.execute("SELECT COUNT(*) FROM catalog_games").fetchone()[0]
         return {
@@ -349,6 +372,25 @@ class GameBridgeApplication:
         return await asyncio.to_thread(
             self.compatibility.ensure_hoyoplay_runtime, game_id
         )
+
+    def claim_steam_install_request(self, app_id: int) -> dict[str, bool]:
+        """Claim a fresh install request created by the standalone launcher."""
+        request_file = self.data_directory / "compatibility" / "steam-install-request.json"
+        try:
+            payload = json.loads(request_file.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return {"claimed": False}
+            requested_at = float(payload.get("requestedAt", 0))
+            matches = int(payload.get("appId", 0)) == int(app_id)
+        except (OSError, TypeError, ValueError):
+            return {"claimed": False}
+        fresh = 0 <= time.time() - requested_at <= 120
+        if not matches or not fresh:
+            if not fresh:
+                request_file.unlink(missing_ok=True)
+            return {"claimed": False}
+        request_file.unlink(missing_ok=True)
+        return {"claimed": True}
 
     async def install_provider_tool(self, provider_id: str) -> dict[str, str]:
         if provider_id != "epic":
@@ -405,6 +447,7 @@ class GameBridgeApplication:
         provider = self.providers.get(provider_id)
         if not isinstance(provider, HoYoPlayProvider):
             raise ValueError("provider.client_launch_unsupported")
+        provider.prepare_launcher_game_association()
         if not self.compatibility.status()["ready"]:
             await self.prepare_compatibility()
         profile = await provider.resolve_launch(
@@ -742,9 +785,19 @@ class GameBridgeApplication:
         return {"current": channel}
 
     def steam_library_games(self) -> list[dict[str, object]]:
-        page = self.list_games("", 0, 50)
+        items: list[dict[str, object]] = []
+        offset = 0
+        while True:
+            page = self.list_games("", offset, 50)
+            page_items = page["items"]
+            if not isinstance(page_items, list):
+                break
+            items.extend(page_items)
+            offset += len(page_items)
+            if not page_items or offset >= int(page["total"]):
+                break
         games: list[dict[str, object]] = []
-        for item in page["items"]:
+        for item in items:
             game = dict(item)
             if game["provider_id"] == "hoyoplay_global" and game["external_game_id"] in {
                 "hk4e_global", "nap_global", "hkrpg_global", "bh3_global"
@@ -927,11 +980,21 @@ class GameBridgeApplication:
         if game.get("provider_id") != "mihoyo_cn":
             return None
         unified_games = {
-            "hk4e_cn": "genshin",
             "nap_cn": "zzz",
             "hkrpg_cn": "starrail",
             "bh3_cn": "honkai3",
         }
+        try:
+            selected_region = (self.data_directory / "mihoyo-selection").read_text(
+                encoding="utf-8"
+            ).strip()
+        except OSError:
+            selected_region = "official"
+        if (
+            game.get("external_game_id") == "hk4e_cn"
+            and selected_region == "global"
+        ):
+            unified_games["hk4e_cn"] = "genshin"
         unified_game = unified_games.get(str(game.get("external_game_id")))
         if unified_game is not None:
             return {

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from gamebridge.launcher import (
     _apply_lsfg_paths,
+    _bh3_global_runtime,
     _bh3_runtime,
     _compose_game_wrapper,
     _ensure_hoyoplay_game_drive,
@@ -14,21 +15,24 @@ from gamebridge.launcher import (
     _hoyoplay_uses_shared_dwproton,
     _hoyoplay_wine_prefix,
     _hoyoplay_working_directory,
+    _install_bh3_global_runtime,
     _is_hoyoplay_target,
     _launch_modifiers,
     _legendary_launch_spec,
     _official_client_command,
-    _recover_embedded_lsfg,
+    _prepare_isolated_steam_home,
     _record_last_played,
+    _recover_embedded_lsfg,
     _split_glued_modifiers,
     _steam_compat_data_path,
     _steam_proton_command,
+    _steam_runtime_entry_points,
     _unified_hoyoplay_route,
     _uses_unified_cn_channel_switch,
 )
+from gamebridge.play_history import read_history_store
 from gamebridge.providers.hoyoplay import MIHOYO_CN, HoYoPlayProvider
 from gamebridge.storage import StorageRoot
-from gamebridge.play_history import read_history_store
 
 
 def test_legendary_json_plan_becomes_a_structured_waited_command(tmp_path):
@@ -141,6 +145,27 @@ def test_global_hoyoplay_never_reuses_cn_steam_prefix(tmp_path):
     assert _hoyoplay_launch_prefix(provider_prefix, "hoyoplay_global", 1234) == provider_prefix
 
 
+def test_each_global_game_uses_an_isolated_compatibility_environment(tmp_path):
+    provider_prefix = tmp_path / "compatibility/hoyoplay-global"
+    game_ids = ("hk4e_global", "nap_global", "hkrpg_global", "bh3_global")
+    prefixes = {
+        _hoyoplay_launch_prefix(
+            provider_prefix,
+            "hoyoplay_global",
+            1234,
+            game_id=game_id,
+            uses_game_runtime=True,
+        )
+        for game_id in game_ids
+    }
+
+    assert prefixes == {
+        tmp_path / "compatibility/prefixes/hoyoplay-global" / game_id
+        for game_id in game_ids
+    }
+    assert provider_prefix not in prefixes
+
+
 def test_unified_cn_launcher_keeps_shared_provider_prefix(tmp_path):
     provider_prefix = tmp_path / "provider-prefix"
     assert _hoyoplay_launch_prefix(provider_prefix, "mihoyo_cn", 1234) == provider_prefix
@@ -152,13 +177,26 @@ def test_unified_cn_game_uses_its_preserved_steam_card_prefix(tmp_path, monkeypa
         tmp_path / "provider-prefix",
         "mihoyo_cn",
         1234,
+        game_id="hk4e_cn",
         uses_game_runtime=True,
     ) == tmp_path / ".local/share/Steam/steamapps/compatdata/1234/pfx"
+
+
+def test_cn_zzz_uses_the_shared_provider_prefix_from_verified_old_route(tmp_path):
+    provider_prefix = tmp_path / "provider-prefix"
+    assert _hoyoplay_launch_prefix(
+        provider_prefix,
+        "mihoyo_cn",
+        1234,
+        game_id="nap_cn",
+        uses_game_runtime=True,
+    ) == provider_prefix
 
 
 def test_global_hoyoplay_uses_published_standalone_umu_ids():
     assert _hoyoplay_umu_id("hoyoplay_global", "hk4e_global") == "umu-genshin"
     assert _hoyoplay_umu_id("hoyoplay_global", "nap_global") == "umu-zenlesszonezero"
+    assert _hoyoplay_umu_id("mihoyo_cn", "nap_cn") == "umu-default"
     assert _hoyoplay_umu_id("hoyoplay_global", "hkrpg_global") == "umu-default"
     assert _hoyoplay_umu_id("mihoyo_cn", "hk4e_cn") == "umu-default"
 
@@ -177,7 +215,7 @@ def test_missing_hoyoplay_game_fallback_uses_launcher_runtime(tmp_path):
 def test_only_proven_standalone_games_use_nested_steam_proton():
     assert _hoyoplay_uses_nested_steam_proton("hoyoplay_global", "bh3_global")
     assert _hoyoplay_uses_nested_steam_proton("mihoyo_cn", "hk4e_cn")
-    assert _hoyoplay_uses_nested_steam_proton("mihoyo_cn", "nap_cn")
+    assert not _hoyoplay_uses_nested_steam_proton("mihoyo_cn", "nap_cn")
     assert _hoyoplay_uses_nested_steam_proton("mihoyo_cn", "hkrpg_cn")
     assert _hoyoplay_uses_nested_steam_proton("mihoyo_cn", "bh3_cn")
     assert not _hoyoplay_uses_nested_steam_proton("hoyoplay_global", "hkrpg_global")
@@ -214,6 +252,8 @@ def test_steam_proton_command_preserves_verified_runtime_order(tmp_path, monkeyp
     for path in (entry, proton, executable):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
+    entry.chmod(0o755)
+    proton.chmod(0o755)
     assert _steam_proton_command(proton.parent, executable) == [
         str(entry), "--verb=waitforexitandrun", "--",
         str(proton), "waitforexitandrun", str(executable),
@@ -228,10 +268,70 @@ def test_steam_proton_command_forwards_structured_launcher_arguments(tmp_path, m
     for path in (entry, proton, launcher):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
+    entry.chmod(0o755)
+    proton.chmod(0o755)
 
     assert _steam_proton_command(
         proton.parent, launcher, arguments=["--game=bh3_cn"]
     )[-2:] == [str(launcher), "--game=bh3_cn"]
+
+
+def test_steam_runtime_is_found_on_a_registered_external_library(tmp_path):
+    library = tmp_path / "external/SteamLibrary"
+    entry = library / "steamapps/common/SteamLinuxRuntime_sniper/_v2-entry-point"
+    entry.parent.mkdir(parents=True)
+    entry.touch(mode=0o755)
+    library_file = tmp_path / ".local/share/Steam/steamapps/libraryfolders.vdf"
+    library_file.parent.mkdir(parents=True)
+    library_file.write_text(
+        f'"libraryfolders"\n{{\n  "0"\n  {{\n    "path" "{library}"\n  }}\n}}\n',
+        encoding="utf-8",
+    )
+
+    assert _steam_runtime_entry_points(tmp_path) == [entry.resolve()]
+
+
+def test_steam_runtime_selection_prefers_newer_compatible_family(tmp_path):
+    common = tmp_path / ".local/share/Steam/steamapps/common"
+    names = (
+        "SteamLinuxRuntime_sniper",
+        "SteamLinuxRuntime_4",
+    )
+    entries = []
+    for name in names:
+        entry = common / name / "_v2-entry-point"
+        entry.parent.mkdir(parents=True)
+        entry.touch(mode=0o755)
+        entries.append(entry.resolve())
+
+    assert _steam_runtime_entry_points(tmp_path) == [entries[1], entries[0]]
+
+
+def test_umu_managed_runtime_4_rejects_old_steam_runtime(tmp_path):
+    umu_entry = tmp_path / ".local/share/umu/steamrt4/_v2-entry-point"
+    steam_entry = (
+        tmp_path
+        / ".local/share/Steam/steamapps/common/SteamLinuxRuntime_soldier/_v2-entry-point"
+    )
+    for entry in (umu_entry, steam_entry):
+        entry.parent.mkdir(parents=True)
+        entry.touch(mode=0o755)
+
+    assert _steam_runtime_entry_points(tmp_path) == [umu_entry.resolve()]
+
+
+def test_steam_proton_command_explains_when_no_container_runtime_exists(
+    tmp_path, monkeypatch
+):
+    import pytest
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+    proton = tmp_path / "dwproton/proton"
+    proton.parent.mkdir(parents=True)
+    proton.touch(mode=0o755)
+
+    with pytest.raises(FileNotFoundError, match="registered Steam libraries"):
+        _steam_proton_command(proton.parent, tmp_path / "game.exe")
 
 
 def test_steam_compat_data_path_accepts_prefix_root_and_pfx_directory(tmp_path):
@@ -253,7 +353,7 @@ def test_bh3_global_uses_proton_pfx_inside_its_isolated_compat_data(tmp_path):
     ) == global_prefix
 
 
-def test_bh3_prefers_device_validated_ge_proton_11_5(tmp_path, monkeypatch):
+def test_bh3_cn_prefers_device_validated_ge_proton_11_5(tmp_path, monkeypatch):
     runtime = tmp_path / "GE-Proton11-5-x86_64"
     fallback = tmp_path / "dwproton-11.0-11-x86_64"
     monkeypatch.setattr(
@@ -270,6 +370,67 @@ def test_bh3_prefers_device_validated_ge_proton_11_5(tmp_path, monkeypatch):
         "GE-Proton11-5-x86_64",
         runtime,
     )
+
+
+def test_bh3_global_prefers_proton_hotfix_from_any_steam_library(
+    tmp_path, monkeypatch
+):
+    hotfix = tmp_path / "external/steamapps/common/Proton Hotfix"
+    ge = tmp_path / "GE-Proton11-5-x86_64"
+    monkeypatch.setattr(
+        "gamebridge.compatibility.CompatibilityManager.proton_layers",
+        lambda _self: [
+            ("GE-Proton11-5-x86_64", ge),
+            ("Proton Hotfix", hotfix),
+        ],
+    )
+
+    from gamebridge.compatibility import CompatibilityManager
+
+    assert _bh3_global_runtime(
+        CompatibilityManager(tmp_path / "compatibility")
+    ) == ("Proton Hotfix", hotfix)
+
+
+def test_bh3_global_does_not_fall_back_to_incompatible_ge_runtime(
+    tmp_path, monkeypatch
+):
+    ge = tmp_path / "GE-Proton11-5-x86_64"
+    monkeypatch.setattr(
+        "gamebridge.compatibility.CompatibilityManager.proton_layers",
+        lambda _self: [("GE-Proton11-5-x86_64", ge)],
+    )
+
+    from gamebridge.compatibility import CompatibilityManager
+
+    assert _bh3_global_runtime(
+        CompatibilityManager(tmp_path / "compatibility")
+    ) is None
+
+
+def test_bh3_global_requests_official_hotfix_and_waits_for_it(
+    tmp_path, monkeypatch
+):
+    from gamebridge.compatibility import CompatibilityManager
+
+    manager = CompatibilityManager(tmp_path / "compatibility")
+    hotfix = tmp_path / "external/steamapps/common/Proton Hotfix"
+    responses = iter([[], [("Proton Hotfix", hotfix)]])
+    monkeypatch.setattr(manager, "proton_layers", lambda: next(responses))
+    monkeypatch.setattr("gamebridge.launcher.shutil.which", lambda _name: "/usr/bin/steam")
+    commands = []
+    monkeypatch.setattr(
+        "gamebridge.launcher.subprocess.Popen",
+        lambda command, **kwargs: commands.append((command, kwargs)),
+    )
+
+    result = _install_bh3_global_runtime(
+        manager, tmp_path / "data", timeout_seconds=1, poll_seconds=0
+    )
+
+    assert result == ("Proton Hotfix", hotfix)
+    assert commands[0][0] == ["/usr/bin/steam", "steam://install/2180100"]
+    assert not (tmp_path / "data/compatibility/steam-install-request.json").exists()
 
 
 def test_decky_wrappers_are_forwarded_to_the_real_game_command():
@@ -329,6 +490,37 @@ def test_games_without_lsfg_keep_the_provider_configuration_isolated():
     _apply_lsfg_paths(environment, Path("/home/deck"))
     assert environment["XDG_CONFIG_HOME"] == "/isolated/provider/config"
     assert "XDG_DATA_HOME" not in environment
+
+
+def test_epic_isolated_home_exposes_native_steam_clients(tmp_path):
+    user_home = tmp_path / "user"
+    isolated_home = tmp_path / "provider"
+    for architecture in ("32", "64"):
+        client = user_home / f".local/share/Steam/linux{architecture}/steamclient.so"
+        client.parent.mkdir(parents=True)
+        client.touch()
+
+    _prepare_isolated_steam_home(isolated_home, user_home)
+
+    assert (isolated_home / ".steam/sdk32/steamclient.so").is_file()
+    assert (isolated_home / ".steam/sdk64/steamclient.so").is_file()
+
+
+def test_epic_isolated_home_does_not_replace_user_owned_sdk_directory(tmp_path):
+    user_home = tmp_path / "user"
+    isolated_home = tmp_path / "provider"
+    source = user_home / ".local/share/Steam/linux64/steamclient.so"
+    source.parent.mkdir(parents=True)
+    source.touch()
+    existing = isolated_home / ".steam/sdk64"
+    existing.mkdir(parents=True)
+    marker = existing / "keep"
+    marker.touch()
+
+    _prepare_isolated_steam_home(isolated_home, user_home)
+
+    assert marker.is_file()
+    assert not existing.is_symlink()
 
 
 def test_wrong_order_lsfg_is_recovered_without_running_steam_command_twice(tmp_path):

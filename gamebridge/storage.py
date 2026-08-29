@@ -95,7 +95,7 @@ def storage_health(
     )
 
 
-def _steam_library_paths(home: Path) -> list[Path]:
+def steam_library_paths(home: Path) -> list[Path]:
     candidates = (
         home / ".local/share/Steam/steamapps/libraryfolders.vdf",
         home / ".steam/root/steamapps/libraryfolders.vdf",
@@ -119,7 +119,7 @@ def storage_roots(home: Path | None = None) -> list[StorageRoot]:
     """Return writable user-facing storage roots without assuming a username or label."""
     resolved_home = (home or Path.home()).expanduser().resolve()
     mounts = mounted_filesystems()
-    steam_libraries = _steam_library_paths(resolved_home)
+    steam_libraries = steam_library_paths(resolved_home)
     roots = [StorageRoot(resolved_home, _source_for_path(resolved_home, mounts), True)]
     seen_devices: set[tuple[int, Path]] = set()
     try:
@@ -188,8 +188,20 @@ def ensure_wine_storage_drive(
     game_drive = dosdevices / "g:"
     dosdevices.mkdir(parents=True, exist_ok=True)
     if os.path.lexists(game_drive):
+        if not game_drive.is_symlink():
+            return None
         try:
-            return selected if game_drive.is_symlink() and game_drive.resolve() == selected else None
+            current = game_drive.resolve(strict=False)
+        except OSError:
+            current = None
+        if current == selected and game_drive.is_dir():
+            return selected
+        # A working G: can intentionally point to the game disk while the
+        # launcher lives elsewhere. Only repair a link whose disk is gone.
+        if game_drive.is_dir():
+            return None
+        try:
+            game_drive.unlink()
         except OSError:
             return None
     try:

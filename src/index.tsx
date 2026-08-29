@@ -15,8 +15,9 @@ import { localizeBackend, steamT, t } from "./i18n";
 type ProviderSummary = {
   id: string;
   name: string;
+  gameCount?: number;
   capabilities: Record<string, boolean>;
-  status: { state: string; message?: string; version?: string; account?: string; action?: string; officialPage?: string; installer?: { sourceFilename?: string; sha256?: string } };
+  status: { state: string; message?: string; version?: string; account?: string; action?: string; officialPage?: string; storageState?: string; unavailableGames?: string[]; installer?: { sourceFilename?: string; sha256?: string } };
 };
 
 type Dashboard = {
@@ -111,6 +112,7 @@ type InstallJob = {
 const getDashboard = callable<[], Dashboard>("get_dashboard");
 const prepareCompatibility = callable<[], Dashboard["runtime"]>("prepare_compatibility");
 const prepareHoYoPlayGameRuntime = callable<[gameId: string], { version: string; path: string }>("prepare_hoyoplay_game_runtime");
+const claimSteamInstallRequest = callable<[appId: number], { claimed: boolean }>("claim_steam_install_request");
 const installProviderTool = callable<[providerId: string], { version: string; path: string }>("install_provider_tool");
 const automaticEpicLogin = callable<[], { state: string }>("automatic_epic_login");
 const syncProviderLibrary = callable<[providerId: string], { count: number }>("sync_provider_library");
@@ -166,12 +168,32 @@ const setRuntimeLanguage = callable<[providerId: string, externalGameId: string,
 type LaunchPreset = "default" | "lsfg" | "framegen" | "combined";
 type ModifierAvailability = { lsfg: boolean; framegen: boolean };
 const shortcutLaunchPreset = callable<[preset: LaunchPreset, providerId: string, externalGameId: string], string>("shortcut_launch_preset");
+const shortcutProfileLaunchPreset = callable<[preset: LaunchPreset, base: string, mode: SteamShortcutProfile["mode"]], string>("shortcut_profile_launch_preset");
 const getLaunchModifierAvailability = callable<[], ModifierAvailability>("launch_modifier_availability");
 const GAMEBRIDGE_ENTRY = "/usr/bin/python3";
 const getSteamGameDetails = callable<[steamAppId: number, title?: string], GameDetails | null>("steam_game_details");
 let cachedDashboard: Dashboard | undefined;
 let cachedSteamLibraryGames: SteamLibraryGame[] | undefined;
 let cachedModifierAvailability: ModifierAvailability = { lsfg: false, framegen: false };
+const GAMEBRIDGE_LIBRARY_UPDATED = "gamebridge-library-updated";
+const GAMEBRIDGE_DASHBOARD_UPDATED = "gamebridge-dashboard-updated";
+
+function cacheDashboard(value: Dashboard): Dashboard {
+  cachedDashboard = value;
+  window.dispatchEvent(new Event(GAMEBRIDGE_DASHBOARD_UPDATED));
+  return value;
+}
+
+function cacheSteamLibraryGames(value: SteamLibraryGame[]): SteamLibraryGame[] {
+  cachedSteamLibraryGames = value;
+  reconcileDirectShortcutTargets(value);
+  window.dispatchEvent(new Event(GAMEBRIDGE_LIBRARY_UPDATED));
+  return value;
+}
+
+async function refreshSteamLibraryGameCache(timeout = 60000): Promise<SteamLibraryGame[]> {
+  return cacheSteamLibraryGames(await withTimeout(getSteamLibraryGames(), timeout));
+}
 const EPIC_LOGIN_URL = "https://www.epicgames.com/id/login?redirectUrl=https%3A%2F%2Fwww.epicgames.com%2Fid%2Fapi%2Fredirect%3FclientId%3D34a02cf8f4414e29b15921876da36f9a%26responseType%3Dcode";
 const STEAMGRIDDB_API_URL = "https://www.steamgriddb.com/profile/preferences/api";
 const STEAMGRIDDB_STEAM_LOGIN_URL = "https://steamcommunity.com/openid/login?openid.identity=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.claimed_id=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0%2Fidentifier_select&openid.ns=http%3A%2F%2Fspecs.openid.net%2Fauth%2F2.0&openid.mode=checkid_setup&openid.realm=https%3A%2F%2Fwww.steamgriddb.com&openid.return_to=https%3A%2F%2Fwww.steamgriddb.com%2Flogin%2Fsteam";
@@ -243,18 +265,21 @@ function ProviderSteamLibraryPage({ providerIds }: { providerIds: string[] }) {
 
   useEffect(() => {
     let active = true;
-    const reload = () => void withTimeout(getSteamLibraryGames(), 60000).then((value) => {
-      cachedSteamLibraryGames = value;
-      reconcileDirectShortcutTargets(value);
+    const applyCachedGames = () => {
+      if (active && cachedSteamLibraryGames) setGames(cachedSteamLibraryGames);
+    };
+    const reload = () => void refreshSteamLibraryGameCache().then((value) => {
       if (active) setGames(value);
     }).catch((reason) => {
       if (active) setError(reason instanceof Error ? reason.message : String(reason));
     });
     reload();
     window.addEventListener("gamebridge-artwork-updated", reload);
+    window.addEventListener(GAMEBRIDGE_LIBRARY_UPDATED, applyCachedGames);
     return () => {
       active = false;
       window.removeEventListener("gamebridge-artwork-updated", reload);
+      window.removeEventListener(GAMEBRIDGE_LIBRARY_UPDATED, applyCachedGames);
     };
   }, []);
 
@@ -282,19 +307,29 @@ function ProviderSteamLibraryPage({ providerIds }: { providerIds: string[] }) {
       // Opening an existing card is pure navigation. Revalidating metadata,
       // launch options or artwork here makes every visit look like a network
       // load and can invalidate Steam's native library cache.
-      Navigation.Navigate(`/library/app/${existingAppId}`);
+      if (!await showCompatToolRestartPromptIfRequired(existingAppId, game)) {
+        Navigation.Navigate(`/library/app/${existingAppId}`);
+      }
       return;
     }
     try {
       setOpeningGameId(game.id);
       // Only unresolved cards need fresh state before their first shortcut is
       // created. Existing shortcuts take the immediate path above.
+      if (game.provider_id === "mihoyo_cn" || game.provider_id === "hoyoplay_global") {
+        // A clean machine may not have the game's verified Proton build yet.
+        // Install it before refreshing the shortcut profile so Genshin receives
+        // its validated direct-executable route on the very first card open.
+        await prepareHoYoPlayGameRuntime(game.external_game_id);
+      }
       const fresh = await getGameDetails(game.id);
       Object.assign(game, fresh);
       let appId = game.steam_app_id;
       let createdShortcut = false;
       if (appId && (window as any).appStore?.GetAppOverviewByAppID?.(appId)) {
-        Navigation.Navigate(`/library/app/${appId}`);
+        if (!await showCompatToolRestartPromptIfRequired(appId, game)) {
+          Navigation.Navigate(`/library/app/${appId}`);
+        }
         return;
       }
       if (appId && !(window as any).appStore?.GetAppOverviewByAppID?.(appId)) {
@@ -375,7 +410,9 @@ function ProviderSteamLibraryPage({ providerIds }: { providerIds: string[] }) {
           console.warn("[GameBridge] Steam artwork update failed", reason);
         }
       }
-      Navigation.Navigate(`/library/app/${appId}`);
+      if (!await showCompatToolRestartPromptIfRequired(appId, game)) {
+        Navigation.Navigate(`/library/app/${appId}`);
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -553,6 +590,43 @@ async function waitForSteamShortcut(appId: number) {
   }
 }
 
+async function isCompatToolLoadedBySteam(appId: number, compatibilityTool: string): Promise<boolean> {
+  const apps = SteamClient.Apps as any;
+  if (typeof apps.GetAvailableCompatTools !== "function") return true;
+  try {
+    const response = await apps.GetAvailableCompatTools(appId);
+    const tools = Array.isArray(response)
+      ? response
+      : response?.rgCompatTools ?? response?.tools;
+    if (!Array.isArray(tools)) return true;
+    return tools.some((tool: any) => tool?.strToolName === compatibilityTool);
+  } catch (reason) {
+    console.warn("[GameBridge] Could not inspect Steam compatibility tools", reason);
+    return true;
+  }
+}
+
+async function showCompatToolRestartPromptIfRequired(
+  appId: number,
+  game: SteamLibraryGame | GameDetails,
+): Promise<boolean> {
+  const profile = game.steam_shortcut;
+  if (profile?.mode !== "direct_executable" || !profile.compatibility_tool) return false;
+  if (await isCompatToolLoadedBySteam(appId, profile.compatibility_tool)) return false;
+  const user = SteamClient.User as any;
+  if (typeof user?.StartRestart !== "function") return false;
+  showModal(
+    <ConfirmModal
+      strTitle={t("compatRestartTitle")}
+      strDescription={t("compatRestartDescription")}
+      strOKButtonText={t("restartSteam")}
+      strCancelButtonText={steamT("#Button_Cancel", "cancel")}
+      onOK={() => window.setTimeout(() => user.StartRestart(false), 250)}
+    />,
+  );
+  return true;
+}
+
 async function waitForShortcutGameId(appId: number): Promise<string | undefined> {
   const started = Date.now();
   while (Date.now() - started < 5000) {
@@ -673,17 +747,12 @@ async function applyIntegratedLaunchPreset(
     // ``mihoyo + genshin``). Never reconstruct that route from the current
     // provider/game IDs: doing so changes its Prefix and can make it unlaunchable.
     applyManagedShortcutTarget(appId, game);
-    if (preset !== "default") {
-      const prefixes: Record<Exclude<LaunchPreset, "default">, string> = {
-        lsfg: "~/lsfg %command%",
-        framegen: "WINEDLLOVERRIDES=dxgi=n,b SteamDeck=0 %command%",
-        combined: "~/fgmod/fgmod ~/lsfg %command%",
-      };
-      setShortcutLaunchOptions(
-        appId,
-        `${prefixes[preset]} ${game.steam_shortcut.launch_options}`,
-      );
-    }
+    const launchOptions = await shortcutProfileLaunchPreset(
+      preset,
+      game.steam_shortcut.launch_options,
+      game.steam_shortcut.mode,
+    );
+    setShortcutLaunchOptions(appId, launchOptions);
   } else {
     const launchOptions = await shortcutLaunchPreset(
       preset, game.provider_id, game.external_game_id,
@@ -744,7 +813,7 @@ async function openOfficialLauncherToUninstall(game: SteamLibraryGame): Promise<
     if (selection.current === "global") providerId = "hoyoplay_global";
   }
   const dashboard = cachedDashboard ?? await getDashboard();
-  cachedDashboard = dashboard;
+  cacheDashboard(dashboard);
   const provider = dashboard.providers.find((candidate) => candidate.id === providerId);
   if (!provider) throw new Error(`Provider unavailable: ${providerId}`);
   await launchProviderThroughSteam(provider, "launcher");
@@ -1182,8 +1251,32 @@ function usesSteamGridDbBackend(game: SteamLibraryGame): boolean {
     });
 }
 
-function ProviderTabAddon({ count, manageFocus = false }: { count: number; manageFocus?: boolean }) {
+function ProviderTabAddon({ count, providerId, manageFocus = false }: {
+  count: number; providerId?: string; manageFocus?: boolean;
+}) {
   const marker = useRef<HTMLSpanElement>(null);
+  const currentCount = () => {
+    if (!providerId) return count;
+    const backendCount = cachedDashboard?.providers.find(
+      (provider) => provider.id === providerId,
+    )?.gameCount;
+    if (typeof backendCount === "number") return backendCount;
+    return cachedSteamLibraryGames?.filter(
+      (game) => game.provider_id === providerId,
+    ).length ?? count;
+  };
+  const [liveCount, setLiveCount] = useState(currentCount);
+
+  useEffect(() => {
+    const update = () => setLiveCount(currentCount());
+    window.addEventListener(GAMEBRIDGE_LIBRARY_UPDATED, update);
+    window.addEventListener(GAMEBRIDGE_DASHBOARD_UPDATED, update);
+    update();
+    return () => {
+      window.removeEventListener(GAMEBRIDGE_LIBRARY_UPDATED, update);
+      window.removeEventListener(GAMEBRIDGE_DASHBOARD_UPDATED, update);
+    };
+  }, [providerId, count]);
 
   useEffect(() => {
     if (!manageFocus) return;
@@ -1227,7 +1320,7 @@ function ProviderTabAddon({ count, manageFocus = false }: { count: number; manag
     };
   }, [manageFocus]);
 
-  return <span ref={marker}>{count}</span>;
+  return <span ref={marker}>{liveCount}</span>;
 }
 
 function injectProviderTabs(result: unknown): unknown {
@@ -1254,7 +1347,7 @@ function injectProviderTabs(result: unknown): unknown {
     id: "gamebridge-epic",
     footer: { ...(template?.footer ?? {}) },
     content: <ProviderSteamLibraryPage providerIds={["epic"]} />,
-    renderTabAddon: () => <ProviderTabAddon count={epicGames.length} manageFocus />,
+    renderTabAddon: () => <ProviderTabAddon count={epicGames.length} providerId="epic" manageFocus />,
   };
   const providerTabs = epicConnected ? [epicTab] : [];
   if (mihoyoGames.length || installedProviders.has("mihoyo_cn") || installedProviders.has("hoyoplay_global")) providerTabs.push({
@@ -2019,7 +2112,7 @@ function Content() {
     try {
       setError(undefined);
       const nextDashboard = await withTimeout(getDashboard());
-      cachedDashboard = nextDashboard;
+      cacheDashboard(nextDashboard);
       setDashboard(nextDashboard);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -2064,6 +2157,7 @@ function Content() {
       await withTimeout(authentication, 360000);
       (Navigation as typeof Navigation & { NavigateBack?: () => void }).NavigateBack?.();
       await refresh();
+      await refreshSteamLibraryGameCache();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -2099,7 +2193,7 @@ function Content() {
   ), [logoutEpic]);
 
   const runOfficialLauncherAction = useCallback(async (provider: ProviderSummary) => {
-    if (installLock.current) return;
+    if (installLock.current || provider.status.action === "wait_for_storage") return;
     try {
       installLock.current = true;
       setError(undefined);
@@ -2134,6 +2228,7 @@ function Content() {
         await withTimeout(syncProviderLibrary(provider.id), 180000);
       }
       await refresh();
+      await refreshSteamLibraryGameCache();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -2223,7 +2318,7 @@ function Content() {
     if (!dashboard || dashboard.runtime.ready || automaticCompatibilityAttempted.current) return;
     automaticCompatibilityAttempted.current = true;
     setPreparingCompatibility(true);
-    void withTimeout(prepareCompatibility(), 120000)
+    void withTimeout(prepareCompatibility(), 900000)
       .then((runtime) => {
         setDashboard((current) => current ? { ...current, runtime } : current);
         if (cachedDashboard) cachedDashboard = { ...cachedDashboard, runtime };
@@ -2239,7 +2334,7 @@ function Content() {
     setPreparingCompatibility(true);
     setError(undefined);
     try {
-      const runtime = await withTimeout(prepareCompatibility(), 120000);
+      const runtime = await withTimeout(prepareCompatibility(), 900000);
       setDashboard((current) => current ? { ...current, runtime } : current);
       if (cachedDashboard) cachedDashboard = { ...cachedDashboard, runtime };
     } catch (reason) {
@@ -2460,6 +2555,9 @@ function Content() {
                           setMihoyoRegion(selection.current === "global"
                             ? "hoyoplay_global"
                             : selection.current === "bilibili" ? "mihoyo_bilibili" : "mihoyo_cn");
+                          return withTimeout(getSteamLibraryGames(), 60000);
+                        }).then((games) => {
+                          cacheSteamLibraryGames(games);
                         }).catch((reason) => {
                           setError(reason instanceof Error ? reason.message : String(reason));
                         }).finally(() => setChangingMihoyoChannel(false));
@@ -2471,10 +2569,17 @@ function Content() {
                 </Focusable>
               </div>
               {!operation && (
-                <DialogButton className={DASHBOARD_ACTION_CLASS} style={{ ...DASHBOARD_PRIMARY_BUTTON_STYLE, marginTop: 10 }} onClick={() => void runOfficialLauncherAction(selectedMihoyoProvider)}>
+                <DialogButton
+                  className={DASHBOARD_ACTION_CLASS}
+                  style={{ ...DASHBOARD_PRIMARY_BUTTON_STYLE, marginTop: 10 }}
+                  disabled={selectedMihoyoProvider.status.action === "wait_for_storage"}
+                  onClick={() => void runOfficialLauncherAction(selectedMihoyoProvider)}
+                >
                   <span className="gamebridge-action-label" style={{ width: "100%", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
                     <FaPlay size={11} />
-                    {selectedMihoyoProvider.status.action === "launch_client"
+                    {selectedMihoyoProvider.status.action === "wait_for_storage"
+                      ? t("launcherStorageUnavailable")
+                      : selectedMihoyoProvider.status.action === "launch_client"
                       ? t("launchMihoyo")
                       : selectedMihoyoProvider.status.action === "run_installer"
                         ? t("installOfficialProvider", { provider: localizeBackend(selectedMihoyoProvider.name) ?? selectedMihoyoProvider.name })
@@ -3029,6 +3134,38 @@ function OperationProgress({ label }: { label: string }) {
   );
 }
 
+const PROTON_HOTFIX_APP_ID = 2180100;
+
+function registerManagedSteamInstalls(): () => void {
+  const installs = (SteamClient as any).Installs;
+  if (typeof installs?.RegisterForShowInstallWizard !== "function") {
+    return () => undefined;
+  }
+  const registration = installs.RegisterForShowInstallWizard((request: any) => {
+    const apps = request?.rgApps ?? request?.rgAppIDs ?? [];
+    const requested = apps.some((app: any) =>
+      Number(app?.nAppID ?? app) === PROTON_HOTFIX_APP_ID);
+    if (!requested) return;
+    void claimSteamInstallRequest(PROTON_HOTFIX_APP_ID).then(async ({ claimed }) => {
+      if (!claimed) return;
+      if (typeof installs.SetCreateShortcuts === "function") {
+        await installs.SetCreateShortcuts(false, false);
+      }
+      await installs.ContinueInstall();
+      const downloads = (SteamClient as any).Downloads;
+      if (typeof downloads?.SetQueueIndex === "function") {
+        await downloads.SetQueueIndex(PROTON_HOTFIX_APP_ID, 0);
+      }
+      if (typeof downloads?.ResumeAppUpdate === "function") {
+        await downloads.ResumeAppUpdate(PROTON_HOTFIX_APP_ID);
+      }
+    }).catch((reason) => {
+      console.warn("[GameBridge] Proton Hotfix automatic install failed", reason);
+    });
+  });
+  return () => registration?.unregister?.();
+}
+
 function EpicGamesLogo() {
   return (
     <div style={{
@@ -3050,23 +3187,22 @@ function MiHoYoLogo() {
 }
 
 export default definePlugin(() => {
-  void getDashboard().then((value) => { cachedDashboard = value; }).catch(() => undefined);
+  void getDashboard().then(cacheDashboard).catch(() => undefined);
   void getLaunchModifierAvailability().then((value) => {
     cachedModifierAvailability = value;
   }).catch(() => undefined);
-  void withTimeout(getSteamLibraryGames(), 60000).then((value) => {
-    cachedSteamLibraryGames = value;
-    reconcileDirectShortcutTargets(value);
-  }).catch(() => undefined);
+  void refreshSteamLibraryGameCache().catch(() => undefined);
   const removeLibraryPatch = applySteamLibraryPatch();
   const removeAppDetailsPatch = applySteamAppDetailsPatch();
   const removeManagementMenuPatch = applySteamManagementMenuPatch();
+  const removeManagedSteamInstalls = registerManagedSteamInstalls();
   return {
     name: "GameBridge",
     titleView: <div className={staticClasses.Title}>GameBridge</div>,
     content: <Content />,
     icon: <FaBridge />,
     onDismount: () => {
+      removeManagedSteamInstalls();
       removeManagementMenuPatch();
       removeAppDetailsPatch();
       removeLibraryPatch();

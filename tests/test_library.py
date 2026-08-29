@@ -136,11 +136,17 @@ def test_game_details_returns_safe_provider_data(tmp_path):
     assert details["installed"] is False
 
 
-def test_genshin_shortcut_uses_stable_unified_region_router(tmp_path):
+def test_genshin_shortcut_restores_verified_direct_steam_route(tmp_path, monkeypatch):
     application = GameBridgeApplication(tmp_path)
     executable = tmp_path / "Genshin Impact Game" / "YuanShen.exe"
     executable.parent.mkdir()
     executable.write_bytes(b"MZ")
+    runtime = tmp_path / "dwproton-11.0-11-x86_64"
+    monkeypatch.setattr(
+        application.compatibility,
+        "proton_layers",
+        lambda: [(runtime.name, runtime)],
+    )
     profile = application._hoyoplay_steam_shortcut(
         {
             "provider_id": "mihoyo_cn",
@@ -152,10 +158,35 @@ def test_genshin_shortcut_uses_stable_unified_region_router(tmp_path):
     )
 
     assert profile == {
+        "mode": "direct_executable",
+        "executable": str(executable),
+        "start_directory": str(executable.parent),
+        "launch_options": (
+            f'WINE_ENABLE_TIMEOUT_FIX=1 "{Path.home() / "homebrew/plugins/GameBridge/gamebridge/channel_guard.py"}" '
+            '--game-id "hk4e_cn" -- %command%'
+        ),
+        "compatibility_tool": runtime.name,
+    }
+
+
+def test_global_genshin_shortcut_uses_native_region_router(tmp_path):
+    application = GameBridgeApplication(tmp_path)
+    (tmp_path / "mihoyo-selection").write_text("global", encoding="utf-8")
+
+    profile = application._hoyoplay_steam_shortcut(
+        {
+            "provider_id": "mihoyo_cn",
+            "external_game_id": "hk4e_cn",
+        }
+    )
+
+    assert profile == {
         "mode": "gamebridge_router",
         "executable": "/usr/bin/python3",
         "start_directory": "/home/deck/homebrew/plugins/GameBridge",
-        "launch_options": '"gamebridge/launcher.py" --provider mihoyo --game-id "genshin"',
+        "launch_options": (
+            '"gamebridge/launcher.py" --provider mihoyo --game-id "genshin"'
+        ),
         "compatibility_tool": "",
     }
 
@@ -231,6 +262,10 @@ async def test_dashboard_seeds_public_catalog_without_claiming_ownership(tmp_pat
     page = application.list_games("", 0, 20)
 
     assert dashboard["gameCount"] == 8
+    provider_counts = {
+        provider["id"]: provider["gameCount"] for provider in dashboard["providers"]
+    }
+    assert provider_counts == {"epic": 0, "mihoyo_cn": 4, "hoyoplay_global": 4}
     assert page["total"] == 8
     genshin = next(item for item in page["items"] if item["id"] == "mihoyo_cn:hk4e_cn")
     assert genshin["title"] == "原神"
@@ -240,6 +275,31 @@ async def test_dashboard_seeds_public_catalog_without_claiming_ownership(tmp_pat
     assert details["launchable"] is False
     assert details["official_client_installed"] is False
     assert application.steam_library_games() == []
+
+
+def test_steam_library_returns_epic_accounts_larger_than_one_page(tmp_path):
+    application = GameBridgeApplication(tmp_path)
+    application.start()
+    with application.database.connect() as db:
+        for index in range(61):
+            game_id = f"epic:large-{index:02d}"
+            db.execute(
+                "INSERT INTO catalog_games(id,title,normalized_title) VALUES(?,?,?)",
+                (game_id, f"Large Library {index:02d}", f"large library {index:02d}"),
+            )
+            db.execute(
+                "INSERT INTO game_releases"
+                "(canonical_game_id,provider_id,external_game_id,region,release_channel) "
+                "VALUES(?,?,?,?,?)",
+                (game_id, "epic", f"large-{index:02d}", "global", "stable"),
+            )
+
+    games = application.steam_library_games()
+
+    assert len(games) == 61
+    assert {game["external_game_id"] for game in games} == {
+        f"large-{index:02d}" for index in range(61)
+    }
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from .storage import steam_library_paths
 from .tooling import DWPROTON_RELEASE, GE_PROTON_RELEASE, ToolInstaller
 
 UMU_DATABASE_URL = "https://umu.openwinecomponents.org/umu_api.php?store=egs"
@@ -25,10 +26,22 @@ class CompatibilityManager:
     def umu_executable(self) -> Path:
         return self.tools_directory / "umu-run"
 
+    @property
+    def default_runtime(self) -> Path:
+        return (
+            Path.home()
+            / ".local/share/Steam/compatibilitytools.d"
+            / GE_PROTON_RELEASE.version
+        )
+
+    def default_runtime_ready(self) -> bool:
+        proton = self.default_runtime / "proton"
+        return proton.is_file() and os.access(proton, os.X_OK)
+
     def status(self) -> dict[str, Any]:
         layers = self.proton_layers()
         return {
-            "ready": self.umu_executable.is_file() and bool(layers),
+            "ready": self.umu_executable.is_file() and self.default_runtime_ready(),
             "umuInstalled": self.umu_executable.is_file(),
             "umuPath": os.fspath(self.umu_executable) if self.umu_executable.is_file() else None,
             "protonLayers": [
@@ -40,6 +53,10 @@ class CompatibilityManager:
     def prepare(self) -> dict[str, Any]:
         if not self.umu_executable.is_file():
             self.installer.install_umu(self.umu_executable)
+        if not self.default_runtime_ready():
+            self.installer.install_compatibility_tool(
+                GE_PROTON_RELEASE, self.default_runtime.parent
+            )
         try:
             self.refresh_database()
         except (OSError, ValueError, RuntimeError):
@@ -198,11 +215,13 @@ class CompatibilityManager:
         os.replace(temporary, self.preferences_file)
 
     def proton_layers(self) -> list[tuple[str, Path]]:
-        roots = (
-            Path.home() / ".local/share/Steam/compatibilitytools.d",
-            Path.home() / ".steam/root/compatibilitytools.d",
-            Path.home() / ".local/share/Steam/steamapps/common",
-        )
+        home = Path.home()
+        roots = {
+            home / ".local/share/Steam/compatibilitytools.d",
+            home / ".steam/root/compatibilitytools.d",
+            home / ".local/share/Steam/steamapps/common",
+            *(library / "steamapps/common" for library in steam_library_paths(home)),
+        }
         found: dict[str, Path] = {}
         for root in roots:
             if not root.is_dir():
@@ -213,11 +232,13 @@ class CompatibilityManager:
 
         def rank(item: tuple[str, Path]) -> tuple[int, str]:
             name = item[0].casefold()
-            if "ge-proton" in name:
+            if name == GE_PROTON_RELEASE.version.casefold():
                 return (0, name)
-            if "experimental" in name:
+            if "ge-proton" in name:
                 return (1, name)
-            return (2, name)
+            if "experimental" in name:
+                return (2, name)
+            return (3, name)
 
         return sorted(found.items(), key=rank)
 

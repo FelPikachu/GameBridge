@@ -52,6 +52,52 @@ def preset_launch_options(preset: str, provider: str, game_id: str) -> str:
     return repair_launch_options(source, provider, game_id)
 
 
+def shortcut_profile_launch_options(preset: str, base: str, mode: str) -> str:
+    """Apply a Decky launch preset without changing a verified shortcut route.
+
+    Router shortcuts launch GameBridge first, so framegen must be deferred until
+    the launcher has resolved the real game executable. Direct shortcuts already
+    contain the real ``%command%`` and keep wrappers immediately in front of it.
+    """
+    if preset == "default":
+        return base
+    if preset not in {"lsfg", "framegen", "combined"}:
+        raise ValueError("launch_options.invalid_preset")
+
+    tokens = _tokens(base)
+    if mode == "direct_executable":
+        if tokens.count("%command%") != 1:
+            raise ValueError("launch_options.invalid_shortcut_profile")
+        command_index = tokens.index("%command%")
+        if preset == "lsfg":
+            tokens[command_index:command_index + 1] = ["~/lsfg", "%command%"]
+        elif preset == "framegen":
+            tokens[:0] = ["WINEDLLOVERRIDES=dxgi=n,b", "SteamDeck=0"]
+        else:
+            tokens[command_index:command_index + 1] = [
+                "~/fgmod/fgmod", "~/lsfg", "%command%",
+            ]
+        return _steam_join(tokens)
+
+    if mode == "gamebridge_router":
+        if "%command%" in tokens or not any(
+            token.endswith("gamebridge/launcher.py") for token in tokens
+        ):
+            raise ValueError("launch_options.invalid_shortcut_profile")
+        if preset == "lsfg":
+            return _steam_join(["~/lsfg", "%command%", *tokens])
+        if preset == "framegen":
+            return _steam_join([
+                "WINEDLLOVERRIDES=dxgi=n,b", "SteamDeck=0", "%command%", *tokens,
+            ])
+        return _steam_join([
+            "~/lsfg", "%command%", *tokens,
+            "--game-wrapper", "~/fgmod/fgmod",
+        ])
+
+    raise ValueError("launch_options.invalid_shortcut_profile")
+
+
 def _steam_join(items: list[str]) -> str:
     """Quote tokens without disabling SteamOS home-directory expansion."""
     rendered: list[str] = []
