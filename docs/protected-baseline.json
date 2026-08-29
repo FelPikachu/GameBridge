@@ -4,11 +4,23 @@
   "gitCommit": "a8bdeee2cb1f2f23548da48e3cf28b823b13437f",
   "releaseArchive": "releases/GameBridge-v0.19.0-beta.4.zip",
   "releaseSha256": "b8ab2de76f7fee0c511e99b24914032bc9e7f71aa4093dd2367092ed6059c9f7",
+  "acceptedCommits": [
+    {
+      "name": "beta5 routed on-demand compatibility progress",
+      "gitCommit": "5bb807e41572bcf78a8a3f35c93f65b8b33229bd"
+    }
+  ],
   "requiredTests": {
     "tests/test_compatibility.py": [
       "test_compatibility_finds_proton_in_external_steam_library",
       "test_prepare_installs_umu_and_verified_default_runtime",
+      "test_on_demand_base_prepare_does_not_download_a_large_proton_runtime",
       "test_application_only_claims_fresh_matching_steam_install_request"
+    ],
+    "tests/test_tooling.py": [
+      "test_x86_managed_components_use_the_single_region_gateway",
+      "test_download_source_is_derived_after_the_gateway_redirect",
+      "test_real_download_progress_records_component_source_and_bytes"
     ],
     "tests/test_launcher.py": [
       "test_global_hoyoplay_never_reuses_cn_steam_prefix",
@@ -45,6 +57,7 @@
     ],
     "tests/test_ui_source_contract.py": [
       "test_epic_sync_refreshes_the_library_tab_cache_and_count",
+      "test_beta5_managed_components_use_routed_progress_in_native_order",
       "test_first_custom_compat_tool_install_prompts_for_one_restart",
       "test_bh3_hotfix_install_is_claimed_and_continued_by_steam"
     ]

@@ -241,6 +241,17 @@ def test_compatibility_preparation_is_automatic_and_allows_runtime_download() ->
     assert "progressElement.append(progressTrack, progressHeader, progressSource)" in SOURCE
 
 
+def test_beta5_managed_components_use_routed_progress_in_native_order() -> None:
+    assert "automaticCompatibilityAttempted.current = true" not in SOURCE
+    assert 'callable<[], ToolDownloadProgress>("tool_download_progress")' in SOURCE
+    assert "progressElement.append(progressTrack, progressHeader, progressSource)" in SOURCE
+    progress = SOURCE[SOURCE.index("function OperationProgress"):]
+    track = progress.index('height: 8, borderRadius: 4')
+    status = progress.index('marginTop: 6, fontSize: 13')
+    source = progress.index("{progress?.source &&")
+    assert track < status < source
+
+
 def test_hoyoplay_runtime_is_ready_before_first_shortcut_profile_is_read() -> None:
     section = SOURCE.split("const openNativeDetails", 1)[1].split(
         "const moveGameGridFocus", 1

@@ -56,6 +56,23 @@ def verify_protected_baseline(*, require_archive: bool) -> bool:
     if ancestor.returncode != 0:
         return fail("当前代码不是从已发布 beta4 继承而来，禁止继续打包")
 
+    accepted_commits = baseline.get("acceptedCommits", [])
+    if not isinstance(accepted_commits, list):
+        return fail("已验收功能提交清单格式错误")
+    for milestone in accepted_commits:
+        if not isinstance(milestone, dict):
+            return fail("已验收功能提交清单格式错误")
+        milestone_name = str(milestone.get("name", "未命名功能"))
+        milestone_commit = str(milestone.get("gitCommit", ""))
+        if not milestone_commit or git_output("cat-file", "-t", milestone_commit) != "commit":
+            return fail(f"找不到已验收功能提交：{milestone_name}")
+        milestone_ancestor = subprocess.run(
+            ["git", "-C", str(ROOT), "merge-base", "--is-ancestor", milestone_commit, "HEAD"],
+            check=False,
+        )
+        if milestone_ancestor.returncode != 0:
+            return fail(f"当前代码未继承已验收功能：{milestone_name}")
+
     required_tests = baseline.get("requiredTests")
     if not isinstance(required_tests, dict) or not required_tests:
         return fail("已锁测试清单为空")
@@ -79,7 +96,7 @@ def verify_protected_baseline(*, require_archive: bool) -> bool:
         if digest != baseline.get("releaseSha256"):
             return fail("发布基线包 SHA-256 不匹配")
 
-    print("[GameBridge 保护锁] 通过：项目继承自正式 beta4，已锁测试齐全")
+    print("[GameBridge 保护锁] 通过：项目继承自正式 beta4 与全部已验收功能，已锁测试齐全")
     return True
 
 
