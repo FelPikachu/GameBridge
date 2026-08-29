@@ -84,6 +84,38 @@ def test_wine_storage_drive_maps_largest_external_root_before_prefix_exists(
     assert (tmp_path / "prefix/dosdevices/g:").resolve() == game.resolve()
 
 
+def test_wine_media_drive_exposes_every_user_and_partition(tmp_path):
+    media = tmp_path / "run/media"
+    alice_game = media / "alice/Game"
+    bob_backup = media / "bob/Backup"
+    alice_game.mkdir(parents=True)
+    bob_backup.mkdir(parents=True)
+    prefix = tmp_path / "prefix"
+
+    drive = storage.ensure_wine_media_drive(prefix, media)
+
+    assert drive == "V:"
+    assert (prefix / "dosdevices/v:").resolve() == media.resolve()
+    assert (prefix / "dosdevices/v:/alice/Game").resolve() == alice_game.resolve()
+    assert (prefix / "dosdevices/v:/bob/Backup").resolve() == bob_backup.resolve()
+
+
+def test_wine_media_drive_does_not_replace_an_existing_user_mapping(tmp_path):
+    media = tmp_path / "run/media"
+    occupied = tmp_path / "user-v-drive"
+    media.mkdir(parents=True)
+    occupied.mkdir()
+    dosdevices = tmp_path / "prefix/dosdevices"
+    dosdevices.mkdir(parents=True)
+    (dosdevices / "v:").symlink_to(occupied, target_is_directory=True)
+
+    drive = storage.ensure_wine_media_drive(tmp_path / "prefix", media)
+
+    assert drive == "W:"
+    assert (dosdevices / "v:").resolve() == occupied.resolve()
+    assert (dosdevices / "w:").resolve() == media.resolve()
+
+
 def test_storage_health_reports_missing_path_as_unavailable(tmp_path):
     health = storage.storage_health(tmp_path / "missing", tmp_path / "missing-mountinfo")
     assert health.state == "unavailable"

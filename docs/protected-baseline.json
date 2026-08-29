@@ -25,6 +25,10 @@
       "test_on_demand_base_prepare_does_not_download_a_large_proton_runtime",
       "test_application_only_claims_fresh_matching_steam_install_request"
     ],
+    "tests/test_storage.py": [
+      "test_wine_media_drive_exposes_every_user_and_partition",
+      "test_wine_media_drive_does_not_replace_an_existing_user_mapping"
+    ],
     "tests/test_tooling.py": [
       "test_x86_managed_components_use_the_single_region_gateway",
       "test_download_source_is_derived_after_the_gateway_redirect",

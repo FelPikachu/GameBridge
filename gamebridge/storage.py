@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _MOUNT_ESCAPE = re.compile(r"\\([0-7]{3})")
+_MEDIA_DRIVE_LETTERS = ("v", "w", "y")
 
 
 @dataclass(frozen=True)
@@ -151,12 +152,50 @@ def storage_roots(home: Path | None = None) -> list[StorageRoot]:
     return roots
 
 
+def ensure_wine_media_drive(
+    prefix: Path,
+    media_root: Path = Path("/run/media"),
+) -> str | None:
+    """Expose every standard SteamOS user and mounted disk through one drive."""
+    try:
+        resolved_media = media_root.resolve(strict=True)
+    except OSError:
+        return None
+    if not resolved_media.is_dir():
+        return None
+
+    dosdevices = prefix / "dosdevices"
+    dosdevices.mkdir(parents=True, exist_ok=True)
+    for letter in _MEDIA_DRIVE_LETTERS:
+        drive = dosdevices / f"{letter}:"
+        if not drive.is_symlink():
+            continue
+        try:
+            if drive.resolve(strict=False) == resolved_media:
+                return f"{letter.upper()}:"
+        except OSError:
+            continue
+
+    for letter in _MEDIA_DRIVE_LETTERS:
+        drive = dosdevices / f"{letter}:"
+        if os.path.lexists(drive):
+            continue
+        try:
+            drive.symlink_to(resolved_media, target_is_directory=True)
+        except OSError:
+            continue
+        return f"{letter.upper()}:"
+    return None
+
+
 def ensure_wine_storage_drive(
     prefix: Path,
     executable: Path,
     roots: list[StorageRoot] | None = None,
+    media_root: Path = Path("/run/media"),
 ) -> Path | None:
     """Expose an external storage root as G: so Wine reports its real capacity."""
+    ensure_wine_media_drive(prefix, media_root)
     external_roots = [
         root.path.resolve()
         for root in (roots if roots is not None else storage_roots())
