@@ -20,6 +20,10 @@
     {
       "name": "beta5 all-user external storage mapping",
       "gitCommit": "36749e263b3a192684cd890170130f68569e1d80"
+    },
+    {
+      "name": "beta5 Epic account library replacement",
+      "gitCommit": "e5470ad49c59fc025d975099671e52079f8084ed"
     }
   ],
   "requiredTests": {
@@ -51,7 +55,8 @@
     ],
     "tests/test_library.py": [
       "test_global_genshin_shortcut_uses_native_region_router",
-      "test_steam_library_returns_epic_accounts_larger_than_one_page"
+      "test_steam_library_returns_epic_accounts_larger_than_one_page",
+      "test_epic_sync_replaces_previous_account_library_without_deleting_installs"
     ],
     "tests/test_launch_options.py": [
       "test_user_facing_presets_match_the_three_verified_combinations",
