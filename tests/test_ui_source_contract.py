@@ -109,7 +109,7 @@ def test_epic_install_action_uses_blue_native_style() -> None:
     assert "background: #1a9fff !important" in SOURCE
     assert '? "#1a9fff"' in SOURCE
     assert "filter: none !important" in SOURCE
-    assert 'game.provider_id === "epic"\n          ? "1"' in SOURCE
+    assert 'progressFill.style.setProperty("opacity", "1", "important")' in SOURCE
 
 
 def test_native_details_render_gamebridge_history_as_one_group() -> None:
@@ -250,6 +250,20 @@ def test_beta5_managed_components_use_routed_progress_in_native_order() -> None:
     status = progress.index('marginTop: 6, fontSize: 13')
     source = progress.index("{progress?.source &&")
     assert track < status < source
+
+
+def test_game_and_compatibility_download_progress_stays_bright() -> None:
+    native = SOURCE[SOURCE.index("const updateProgress"):SOURCE.index("const beginInstall")]
+    assert "visibility:visible!important" in native
+    assert 'progressFill.style.setProperty("opacity", "1", "important")' in native
+    assert 'progressFill.style.setProperty("filter", "none", "important")' in native
+    assert "job?.state === \"paused\" ? \".65\"" not in native
+
+    game = SOURCE[SOURCE.index("function InstallProgress"):SOURCE.index("function DetailLine")]
+    compatibility = SOURCE[SOURCE.index("function OperationProgress"):SOURCE.index("const PROTON_HOTFIX_APP_ID")]
+    for progress in (game, compatibility):
+        assert 'boxShadow: "0 0 7px rgba(26,159,255,.9)"' in progress
+        assert 'opacity: 1, filter: "none"' in progress
 
 
 def test_ready_hoyoplay_native_action_uses_steam_play_label_and_icon() -> None:

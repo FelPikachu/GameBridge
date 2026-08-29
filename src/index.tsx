@@ -1634,16 +1634,16 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
         progressHost.style.overflow = "visible";
         progressElement = steamDocument.createElement("div");
         progressElement.dataset.gamebridgeDownloadProgress = "true";
-        progressElement.style.cssText = "position:absolute;left:0;top:calc(100% + 5px);width:100%;pointer-events:none;z-index:5";
+        progressElement.style.cssText = "position:absolute;left:0;top:calc(100% + 5px);width:100%;pointer-events:none;z-index:5;opacity:1!important;visibility:visible!important;filter:none!important";
         const progressHeader = steamDocument.createElement("div");
         progressHeader.style.cssText = "display:none;justify-content:space-between;gap:8px;margin-top:5px;font-size:12px;color:rgba(255,255,255,.82)";
         progressLabel = steamDocument.createElement("span");
         progressPercent = steamDocument.createElement("span");
         progressHeader.append(progressLabel, progressPercent);
         progressTrack = steamDocument.createElement("div");
-        progressTrack.style.cssText = "width:100%;height:5px;border-radius:3px;background:rgba(255,255,255,.14);overflow:hidden";
+        progressTrack.style.cssText = "width:100%;height:5px;border-radius:3px;background:rgba(255,255,255,.22);overflow:hidden;opacity:1!important;filter:none!important";
         progressFill = steamDocument.createElement("div");
-        progressFill.style.cssText = "height:100%;border-radius:3px;transition:width .25s ease,opacity .2s ease";
+        progressFill.style.cssText = "height:100%;border-radius:3px;transition:width .25s ease;box-shadow:0 0 7px rgba(26,159,255,.9);opacity:1!important;filter:none!important";
         progressFill.style.background = game.provider_id === "epic"
           ? "#1a9fff"
           : nativeAccentBackground(button);
@@ -1657,9 +1657,8 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
         const progress = runtimePreparing ? (runtimeProgress?.progress ?? .01) : (job?.progress ?? 0);
         const percentage = Math.max(1, Math.round(progress * 100));
         progressFill.style.width = `${percentage}%`;
-        progressFill.style.opacity = game.provider_id === "epic"
-          ? "1"
-          : job?.state === "paused" ? ".65" : "1";
+        progressFill.style.setProperty("opacity", "1", "important");
+        progressFill.style.setProperty("filter", "none", "important");
         if (progressLabel?.parentElement && progressPercent && progressSource && progressTrack) {
           progressLabel.parentElement.style.display = runtimePreparing ? "flex" : "none";
           progressLabel.textContent = runtimeProgress
@@ -3185,8 +3184,8 @@ function InstallProgress({ job }: { job: InstallJob }) {
     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
       <span>{label}</span><span>{percent.toFixed(1)}%</span>
     </div>
-    <div style={{ width: "100%", height: 9, borderRadius: 5, overflow: "hidden", background: "rgba(255,255,255,.16)" }}>
-      <div style={{ width: `${percent}%`, height: "100%", background: "#1a9fff", transition: "width .3s ease" }} />
+    <div style={{ width: "100%", height: 9, borderRadius: 5, overflow: "hidden", background: "rgba(255,255,255,.22)", opacity: 1, filter: "none" }}>
+      <div style={{ width: `${percent}%`, height: "100%", background: "#1a9fff", boxShadow: "0 0 7px rgba(26,159,255,.9)", opacity: 1, filter: "none", transition: "width .3s ease" }} />
     </div>
     <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6, fontSize: 12, opacity: .65 }}>
       <span>{new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(job.payload.downloadedMiB ?? 0)} MiB · {new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(job.payload.speedMiBs ?? 0)} MiB/s</span>
@@ -3237,13 +3236,13 @@ function OperationProgress({ label, progress }: { label: string; progress?: Tool
   return (
     <div style={{ width: "100%", marginTop: 10, overflow: "hidden" }}>
       <style>{`@keyframes gamebridge-progress { from { transform: translateX(-110%); } to { transform: translateX(340%); } }`}</style>
-      <div style={{ width: "100%", height: 8, borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,.16)" }}>
+      <div style={{ width: "100%", height: 8, borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,.22)", opacity: 1, filter: "none" }}>
         <div style={progress ? {
           width: `${Math.max(2, percentage ?? 0)}%`, height: "100%", borderRadius: 4,
-          background: "#1a9fff", transition: "width .25s ease",
+          background: "#1a9fff", boxShadow: "0 0 7px rgba(26,159,255,.9)", opacity: 1, filter: "none", transition: "width .25s ease",
         } : {
           width: "30%", height: "100%", borderRadius: 4,
-          background: "#1a9fff", animation: "gamebridge-progress 1.25s ease-in-out infinite",
+          background: "#1a9fff", boxShadow: "0 0 7px rgba(26,159,255,.9)", opacity: 1, filter: "none", animation: "gamebridge-progress 1.25s ease-in-out infinite",
         }} />
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 6, fontSize: 13, opacity: .85 }}>
