@@ -1,0 +1,52 @@
+{
+  "name": "GameBridge v0.19.0-beta.4 accepted baseline",
+  "version": "0.19.0-beta.4",
+  "gitCommit": "a8bdeee2cb1f2f23548da48e3cf28b823b13437f",
+  "releaseArchive": "releases/GameBridge-v0.19.0-beta.4.zip",
+  "releaseSha256": "b8ab2de76f7fee0c511e99b24914032bc9e7f71aa4093dd2367092ed6059c9f7",
+  "requiredTests": {
+    "tests/test_compatibility.py": [
+      "test_compatibility_finds_proton_in_external_steam_library",
+      "test_prepare_installs_umu_and_verified_default_runtime",
+      "test_application_only_claims_fresh_matching_steam_install_request"
+    ],
+    "tests/test_launcher.py": [
+      "test_global_hoyoplay_never_reuses_cn_steam_prefix",
+      "test_each_global_game_uses_an_isolated_compatibility_environment",
+      "test_bh3_global_prefers_proton_hotfix_from_any_steam_library",
+      "test_bh3_global_requests_official_hotfix_and_waits_for_it",
+      "test_hoyoplay_game_drive_maps_the_external_root_containing_launcher"
+    ],
+    "tests/test_hoyoplay_provider.py": [
+      "test_provider_captures_and_switches_exact_official_channel_profiles",
+      "test_fresh_launcher_recovers_old_official_config_with_bilibili_sdk_residue"
+    ],
+    "tests/test_library.py": [
+      "test_global_genshin_shortcut_uses_native_region_router",
+      "test_steam_library_returns_epic_accounts_larger_than_one_page"
+    ],
+    "tests/test_launch_options.py": [
+      "test_user_facing_presets_match_the_three_verified_combinations",
+      "test_hoyoplay_router_presets_keep_the_stable_route"
+    ],
+    "tests/test_cleanup.py": [
+      "test_cleanup_keeps_installed_games_by_default",
+      "test_destructive_cleanup_removes_hoyoplay_prefixes_but_keeps_external_games"
+    ],
+    "tests/test_epic_provider.py": [
+      "test_epic_status_and_library",
+      "test_epic_uninstall_uses_legendary"
+    ],
+    "tests/test_cloud_saves.py": [
+      "test_nonempty_local_save_uploads_and_creates_backup"
+    ],
+    "tests/test_steamgriddb.py": [
+      "test_connection_failure_does_not_expose_key"
+    ],
+    "tests/test_ui_source_contract.py": [
+      "test_epic_sync_refreshes_the_library_tab_cache_and_count",
+      "test_first_custom_compat_tool_install_prompts_for_one_restart",
+      "test_bh3_hotfix_install_is_claimed_and_continued_by_steam"
+    ]
+  }
+}

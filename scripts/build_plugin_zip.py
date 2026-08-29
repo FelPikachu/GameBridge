@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import os
 import stat
+import subprocess
+import sys
 import time
 import zipfile
 from pathlib import Path
@@ -49,6 +51,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build the GameBridge Decky ZIP")
     parser.add_argument("--output", required=True, type=Path)
     arguments = parser.parse_args()
+    guard = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/regression_guard.py"), "--release"],
+        cwd=ROOT,
+        check=False,
+    )
+    if guard.returncode:
+        print("保护锁未通过，已禁止生成 GameBridge 发布包。")
+        return guard.returncode
     build(arguments.output.resolve())
     print(arguments.output.resolve())
     return 0

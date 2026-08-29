@@ -8,6 +8,8 @@ maintained separately in docs/verified-baseline.md.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -15,6 +17,70 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+BASELINE_FILE = ROOT / "docs/protected-baseline.json"
+
+
+def fail(message: str) -> bool:
+    print(f"[GameBridge 保护锁] 失败：{message}")
+    return False
+
+
+def git_output(*arguments: str) -> str | None:
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def verify_protected_baseline(*, require_archive: bool) -> bool:
+    print("\n[GameBridge 保护锁] 核对 beta4 出生证明与已锁测试")
+    try:
+        baseline = json.loads(BASELINE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return fail(f"无法读取 {BASELINE_FILE.relative_to(ROOT)}：{error}")
+
+    repository_root = git_output("rev-parse", "--show-toplevel")
+    if repository_root is None or Path(repository_root).resolve() != ROOT.resolve():
+        return fail("当前目录不是 GameBridge 正式 Git 项目根目录")
+
+    commit = str(baseline.get("gitCommit", ""))
+    if not commit or git_output("cat-file", "-t", commit) != "commit":
+        return fail("找不到已锁定的 beta4 基线提交")
+    ancestor = subprocess.run(
+        ["git", "-C", str(ROOT), "merge-base", "--is-ancestor", commit, "HEAD"],
+        check=False,
+    )
+    if ancestor.returncode != 0:
+        return fail("当前代码不是从已发布 beta4 继承而来，禁止继续打包")
+
+    required_tests = baseline.get("requiredTests")
+    if not isinstance(required_tests, dict) or not required_tests:
+        return fail("已锁测试清单为空")
+    for relative, names in required_tests.items():
+        path = ROOT / relative
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
+            return fail(f"已锁测试文件缺失：{relative}")
+        if not isinstance(names, list):
+            return fail(f"已锁测试清单格式错误：{relative}")
+        for name in names:
+            if f"def {name}(" not in source:
+                return fail(f"已锁能力测试消失：{relative}::{name}")
+
+    if require_archive:
+        archive = ROOT / str(baseline.get("releaseArchive", ""))
+        if not archive.is_file():
+            return fail(f"发布基线包缺失：{archive}")
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if digest != baseline.get("releaseSha256"):
+            return fail("发布基线包 SHA-256 不匹配")
+
+    print("[GameBridge 保护锁] 通过：项目继承自正式 beta4，已锁测试齐全")
+    return True
 
 
 def command_environment() -> dict[str, str]:
@@ -87,14 +153,29 @@ def main() -> int:
         action="store_true",
         help="Run only Python tests for a quick diagnostic; not a release gate.",
     )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="Also require the pinned beta4 release archive; use before packaging.",
+    )
+    parser.add_argument(
+        "--baseline-only",
+        action="store_true",
+        help="Only verify repository ancestry and locked-test presence before editing.",
+    )
     arguments = parser.parse_args()
+
+    if not verify_protected_baseline(require_archive=arguments.release):
+        return 2
+    if arguments.baseline_only:
+        return 0
 
     python = python_runner()
     if python is None:
         print("[GameBridge 保护锁] 失败：找不到已安装 pytest 的 Python 环境。")
         print("[GameBridge 保护锁] 可先创建 .venv，再安装 requirements-dev.txt。")
         return 2
-    checks = [("Python 回归测试", [python, "-m", "pytest", "-q"])]
+    checks = [("Python 回归测试", [python, "-m", "pytest", "-q", "-x"])]
     if not arguments.python_only:
         runner = package_runner()
         if runner is None:
