@@ -39,6 +39,12 @@ class Plugin:
     async def prepare_compatibility(self) -> dict[str, object]:
         return await self.app.prepare_compatibility()
 
+    async def prepare_default_compatibility(self) -> dict[str, object]:
+        return await self.app.prepare_default_compatibility()
+
+    async def tool_download_progress(self) -> dict[str, object]:
+        return self.app.tool_download_progress()
+
     async def prepare_hoyoplay_game_runtime(self, game_id: str) -> dict[str, str]:
         return await self.app.prepare_hoyoplay_game_runtime(game_id)
 

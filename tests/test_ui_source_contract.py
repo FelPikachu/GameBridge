@@ -230,8 +230,12 @@ def test_dashboard_does_not_show_the_legacy_library_entry() -> None:
 
 
 def test_compatibility_preparation_is_automatic_and_allows_runtime_download() -> None:
-    assert "automaticCompatibilityAttempted.current = true" in SOURCE
-    assert SOURCE.count("withTimeout(prepareCompatibility(), 900000)") == 2
+    assert "automaticCompatibilityAttempted.current = true" not in SOURCE
+    assert SOURCE.count("withTimeout(prepareCompatibility(), 900000)") == 1
+    assert 'callable<[], ToolDownloadProgress>("tool_download_progress")' in SOURCE
+    assert "compatPhaseDownloading" in SOURCE
+    assert "compatSourceChina" in SOURCE
+    assert "runtimeProgress?.progress" in SOURCE
 
 
 def test_hoyoplay_runtime_is_ready_before_first_shortcut_profile_is_read() -> None:

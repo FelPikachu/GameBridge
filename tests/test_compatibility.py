@@ -94,6 +94,29 @@ def test_prepare_installs_umu_and_verified_default_runtime(tmp_path, monkeypatch
     assert status["ready"] is True
 
 
+def test_on_demand_base_prepare_does_not_download_a_large_proton_runtime(
+    tmp_path, monkeypatch
+):
+    manager = CompatibilityManager(tmp_path / "data")
+    installed: list[str] = []
+
+    def install_umu(target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.touch()
+        installed.append("umu")
+
+    monkeypatch.setattr(manager.installer, "install_umu", install_umu)
+    monkeypatch.setattr(
+        manager.installer,
+        "install_compatibility_tool",
+        lambda *_args, **_kwargs: installed.append("proton"),
+    )
+
+    manager.prepare_base()
+
+    assert installed == ["umu"]
+
+
 def test_status_does_not_treat_an_arbitrary_proton_as_prepared(tmp_path, monkeypatch):
     manager = CompatibilityManager(tmp_path / "data")
     monkeypatch.setattr("gamebridge.compatibility.Path.home", lambda: tmp_path / "home")

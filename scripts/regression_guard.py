@@ -85,6 +85,10 @@ def verify_protected_baseline(*, require_archive: bool) -> bool:
 
 def command_environment() -> dict[str, str]:
     environment = os.environ.copy()
+    # Packaging is one of the regression tests.  Mark child commands so a
+    # package build exercised by pytest does not start a second full guard and
+    # recurse forever.  A normal, standalone package build still runs the gate.
+    environment["GAMEBRIDGE_REGRESSION_GUARD_ACTIVE"] = "1"
     if shutil.which("node", path=environment.get("PATH")):
         return environment
     bundled_node = (

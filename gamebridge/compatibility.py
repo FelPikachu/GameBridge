@@ -15,12 +15,16 @@ SAFE_ID = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 class CompatibilityManager:
-    def __init__(self, data_directory: str | Path) -> None:
+    def __init__(
+        self,
+        data_directory: str | Path,
+        installer: ToolInstaller | None = None,
+    ) -> None:
         self.data_directory = Path(data_directory)
         self.tools_directory = self.data_directory / "tools"
         self.cache_file = self.data_directory / "cache" / "umu-egs.json"
         self.preferences_file = self.data_directory / "runtime-preferences.json"
-        self.installer = ToolInstaller()
+        self.installer = installer or ToolInstaller()
 
     @property
     def umu_executable(self) -> Path:
@@ -48,14 +52,51 @@ class CompatibilityManager:
                 {"name": name, "path": os.fspath(path), "recommended": index == 0}
                 for index, (name, path) in enumerate(layers)
             ],
+            "preparation": self.installer.progress_status(),
         }
 
+    def prepare_base(self) -> dict[str, Any]:
+        """Install only the small shared runner; game runtimes stay on-demand."""
+        self.installer.set_progress(
+            active=True,
+            component="umu",
+            phase="starting",
+            progress=0.01,
+            source=None,
+            downloadedBytes=0,
+            totalBytes=None,
+        )
+        try:
+            if not self.umu_executable.is_file():
+                self.installer.install_umu(self.umu_executable)
+            else:
+                self.installer.set_progress(
+                    active=False, component="umu", phase="complete", progress=1.0
+                )
+            return self.status()
+        except BaseException:
+            self.installer.set_progress(active=False, phase="failed")
+            raise
+
     def prepare(self) -> dict[str, Any]:
-        if not self.umu_executable.is_file():
-            self.installer.install_umu(self.umu_executable)
+        self.prepare_base()
+        self.installer.set_progress(
+            active=True,
+            component=GE_PROTON_RELEASE.component,
+            phase="checking_runtime",
+            progress=0.14,
+            source=None,
+        )
         if not self.default_runtime_ready():
             self.installer.install_compatibility_tool(
                 GE_PROTON_RELEASE, self.default_runtime.parent
+            )
+        else:
+            self.installer.set_progress(
+                active=False,
+                component=GE_PROTON_RELEASE.component,
+                phase="complete",
+                progress=1.0,
             )
         try:
             self.refresh_database()
@@ -72,6 +113,24 @@ class CompatibilityManager:
             else DWPROTON_RELEASE
         )
         root = Path.home() / ".local/share/Steam/compatibilitytools.d"
+        target = root / release.version
+        self.installer.set_progress(
+            active=True,
+            component=release.component,
+            phase="checking_runtime",
+            progress=0.14,
+            source=None,
+            downloadedBytes=0,
+            totalBytes=None,
+        )
+        if (target / "proton").is_file():
+            self.installer.set_progress(
+                active=False,
+                component=release.component,
+                phase="complete",
+                progress=1.0,
+            )
+            return {"version": release.version, "path": os.fspath(target)}
         return self.installer.install_compatibility_tool(release, root)
 
     def refresh_database(self) -> list[dict[str, Any]]:

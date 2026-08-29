@@ -8,15 +8,18 @@ import shutil
 import ssl
 import tarfile
 import tempfile
+import threading
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Any
 from urllib.parse import urlparse
 
 ALLOWED_DOWNLOAD_HOSTS = {
     "github.com",
     "objects.githubusercontent.com",
     "release-assets.githubusercontent.com",
+    "1300823591-fyjwaget5r.ap-guangzhou.tencentscf.com",
 }
 MAX_TOOL_SIZE = 200 * 1024 * 1024
 MAX_COMPATIBILITY_TOOL_SIZE = 700 * 1024 * 1024
@@ -32,6 +35,8 @@ class ToolRelease:
     version: str
     url: str
     sha256: str
+    component: str = ""
+    gateway_url: str | None = None
 
 
 LEGENDARY_RELEASES = {
@@ -39,11 +44,14 @@ LEGENDARY_RELEASES = {
         "0.21.0",
         "https://github.com/legendary-gl/legendary/releases/download/0.21.0/legendary_linux_x64",
         "c83d1595a9e2cbae4e66b69ecaa1f8649da99b617a72f93312d342e6a5a799c7",
+        "legendary",
+        "https://1300823591-fyjwaget5r.ap-guangzhou.tencentscf.com/download/legendary",
     ),
     "aarch64": ToolRelease(
         "0.21.0",
         "https://github.com/legendary-gl/legendary/releases/download/0.21.0/legendary_linux_arm64",
         "ed0a523c7310aec590a0da9ecdada185fc3b02e75fa5148c0e7ef0680095dce5",
+        "legendary",
     ),
 }
 
@@ -52,6 +60,8 @@ UMU_RELEASE = ToolRelease(
     "https://github.com/Open-Wine-Components/umu-launcher/releases/download/1.4.0/"
     "umu-launcher-1.4.0-zipapp.tar",
     "138ce4b8843608a257d4bee88191ca78a989778bcefd8abb3c1d1aaac3ac6fb8",
+    "umu",
+    "https://1300823591-fyjwaget5r.ap-guangzhou.tencentscf.com/download/umu",
 )
 
 DWPROTON_RELEASE = ToolRelease(
@@ -60,6 +70,8 @@ DWPROTON_RELEASE = ToolRelease(
     "dwproton-11.0-11/dwproton-11.0-11-x86_64.tar.xz",
     "94e502e935e3d743e33647f580489ebd3b54b0789196d87b066f06456455a8dd7"
     "966f149dfcb73e64e9d345a6f2c20ac4b24a9095cad643577b34ae45dcefff5",
+    "dwproton",
+    "https://1300823591-fyjwaget5r.ap-guangzhou.tencentscf.com/download/dw",
 )
 
 GE_PROTON_RELEASE = ToolRelease(
@@ -68,10 +80,32 @@ GE_PROTON_RELEASE = ToolRelease(
     "GE-Proton11-5/GE-Proton11-5-x86_64.tar.gz",
     "8fb1f3ae65a8dc22efd8099ff489075f0eebddf01c445b423244589f6f0a1e19"
     "c01de5d1e722b97fc1ebaf6390c813052ed55290058f8d21f1353a36146f4a2c",
+    "geproton",
+    "https://1300823591-fyjwaget5r.ap-guangzhou.tencentscf.com/download/ge",
 )
 
 
 class ToolInstaller:
+    def __init__(self) -> None:
+        self._progress_lock = threading.Lock()
+        self._progress: dict[str, Any] = {
+            "active": False,
+            "component": None,
+            "phase": "idle",
+            "progress": 0.0,
+            "source": None,
+            "downloadedBytes": 0,
+            "totalBytes": None,
+        }
+
+    def progress_status(self) -> dict[str, Any]:
+        with self._progress_lock:
+            return dict(self._progress)
+
+    def set_progress(self, **values: Any) -> None:
+        with self._progress_lock:
+            self._progress.update(values)
+
     def legendary_release(self) -> ToolRelease:
         architecture = platform.machine().lower()
         aliases = {"amd64": "x86_64", "arm64": "aarch64"}
@@ -85,39 +119,15 @@ class ToolInstaller:
         release = self.legendary_release()
         target_path = Path(target).expanduser().resolve()
         target_path.parent.mkdir(parents=True, exist_ok=True)
-        self._validate_url(release.url)
-        request = urllib.request.Request(  # noqa: S310 -- URL is allowlisted above
-            release.url,
-            headers={"User-Agent": "GameBridge/0.3 (+https://github.com/legendary-gl/legendary)"},
-        )
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=".legendary-", dir=target_path.parent
-        )
-        temporary_path = Path(temporary_name)
-        digest = hashlib.sha256()
-        size = 0
+        temporary_path = self._download(release, target_path.parent, ".legendary-")
         try:
-            with os.fdopen(descriptor, "wb") as destination:
-                context = self._ssl_context()
-                with urllib.request.urlopen(  # noqa: S310
-                    request, timeout=30, context=context
-                ) as response:
-                    self._validate_url(response.geturl())
-                    declared_size = int(response.headers.get("Content-Length", "0") or 0)
-                    if declared_size > MAX_TOOL_SIZE:
-                        raise RuntimeError("Legendary download is unexpectedly large")
-                    while chunk := response.read(1024 * 1024):
-                        size += len(chunk)
-                        if size > MAX_TOOL_SIZE:
-                            raise RuntimeError("Legendary download exceeded size limit")
-                        digest.update(chunk)
-                        destination.write(chunk)
-                destination.flush()
-                os.fsync(destination.fileno())
-            if digest.hexdigest() != release.sha256:
-                raise RuntimeError("Legendary SHA-256 verification failed")
+            self.set_progress(active=True, phase="installing", progress=1.0)
             temporary_path.chmod(0o755)
             os.replace(temporary_path, target_path)
+            self.set_progress(active=False, phase="complete", progress=1.0)
+        except BaseException:
+            self.set_progress(active=False, phase="failed")
+            raise
         finally:
             temporary_path.unlink(missing_ok=True)
         return {"version": release.version, "path": os.fspath(target_path)}
@@ -129,6 +139,7 @@ class ToolInstaller:
         archive = self._download(release, target_path.parent, ".umu-")
         staged = target_path.with_name(f".{target_path.name}.new")
         try:
+            self.set_progress(active=True, phase="installing", progress=1.0)
             with tarfile.open(archive, "r:") as bundle:
                 member = bundle.getmember("umu/umu-run")
                 if not member.isfile() or member.size > 10 * 1024 * 1024:
@@ -143,6 +154,10 @@ class ToolInstaller:
                     os.fsync(destination.fileno())
             staged.chmod(0o755)
             os.replace(staged, target_path)
+            self.set_progress(active=False, phase="complete", progress=1.0)
+        except BaseException:
+            self.set_progress(active=False, phase="failed")
+            raise
         finally:
             archive.unlink(missing_ok=True)
             staged.unlink(missing_ok=True)
@@ -175,6 +190,7 @@ class ToolInstaller:
             )
             staged_parent = Path(tempfile.mkdtemp(prefix=".gamebridge-stage-", dir=root))
             try:
+                self.set_progress(active=True, phase="installing", progress=1.0)
                 with tarfile.open(archive, "r:*") as bundle:
                     members = bundle.getmembers()
                     self._validate_archive_members(members)
@@ -193,6 +209,10 @@ class ToolInstaller:
                 if target.exists():
                     raise RuntimeError("incomplete compatibility tool already exists")
                 os.replace(staged, target)
+                self.set_progress(active=False, phase="complete", progress=1.0)
+            except BaseException:
+                self.set_progress(active=False, phase="failed")
+                raise
             finally:
                 archive.unlink(missing_ok=True)
                 shutil.rmtree(staged_parent, ignore_errors=True)
@@ -207,9 +227,19 @@ class ToolInstaller:
         max_size: int = MAX_TOOL_SIZE,
         algorithm: str = "sha256",
     ) -> Path:
-        self._validate_url(release.url)
+        url = release.gateway_url or release.url
+        self._validate_url(url)
+        self.set_progress(
+            active=True,
+            component=release.component or release.version,
+            phase="connecting",
+            progress=0.0,
+            source=None,
+            downloadedBytes=0,
+            totalBytes=None,
+        )
         request = urllib.request.Request(  # noqa: S310 -- URL is allowlisted above
-            release.url,
+            url,
             headers={"User-Agent": "GameBridge/0.18 (+https://github.com/Open-Wine-Components)"},
         )
         descriptor, temporary_name = tempfile.mkstemp(prefix=prefix, dir=directory)
@@ -221,24 +251,51 @@ class ToolInstaller:
                 with urllib.request.urlopen(  # noqa: S310
                     request, timeout=30, context=self._ssl_context()
                 ) as response:
-                    self._validate_url(response.geturl())
+                    final_url = response.geturl()
+                    self._validate_url(final_url)
+                    source = self._download_source(final_url)
                     declared_size = int(response.headers.get("Content-Length", "0") or 0)
                     if declared_size > max_size:
                         raise RuntimeError("tool download is unexpectedly large")
+                    self.set_progress(
+                        active=True,
+                        phase="downloading",
+                        progress=0.0,
+                        source=source,
+                        totalBytes=declared_size or None,
+                    )
                     while chunk := response.read(1024 * 1024):
                         size += len(chunk)
                         if size > max_size:
                             raise RuntimeError("tool download exceeded size limit")
                         digest.update(chunk)
                         destination.write(chunk)
+                        self.set_progress(
+                            active=True,
+                            phase="downloading",
+                            progress=min(0.99, size / declared_size) if declared_size else 0.0,
+                            source=source,
+                            downloadedBytes=size,
+                            totalBytes=declared_size or None,
+                        )
                 destination.flush()
                 os.fsync(destination.fileno())
+            self.set_progress(active=True, phase="verifying", progress=1.0)
             if digest.hexdigest() != release.sha256:
                 raise RuntimeError("tool SHA-256 verification failed")
             return temporary_path
         except BaseException:
+            self.set_progress(active=False, phase="failed")
             temporary_path.unlink(missing_ok=True)
             raise
+
+    @staticmethod
+    def _download_source(url: str) -> str:
+        hostname = (urlparse(url).hostname or "").casefold()
+        return "china" if (
+            hostname.endswith(".baidupcs.com")
+            or hostname.endswith(".pcs.baidu.com")
+        ) else "official"
 
     @staticmethod
     def _validate_archive_members(members: list[tarfile.TarInfo]) -> None:
@@ -276,7 +333,14 @@ class ToolInstaller:
             "dawn.wine",
             "eu-west-1.euronodes.com",
         }
-        if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
+        hostname = (parsed.hostname or "").casefold()
+        baidu_download_host = (
+            hostname.endswith(".baidupcs.com")
+            or hostname.endswith(".pcs.baidu.com")
+        )
+        if parsed.scheme != "https" or (
+            hostname not in allowed_hosts and not baidu_download_host
+        ):
             raise ValueError("download URL is not allowlisted")
 
     @staticmethod

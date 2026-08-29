@@ -30,6 +30,16 @@ type Dashboard = {
   status: string;
 };
 
+type ToolDownloadProgress = {
+  active: boolean;
+  component?: "umu" | "geproton" | "dwproton" | "legendary";
+  phase: string;
+  progress: number;
+  source?: "china" | "official";
+  downloadedBytes?: number;
+  totalBytes?: number;
+};
+
 type GameItem = {
   id: string;
   title: string;
@@ -110,7 +120,8 @@ type InstallJob = {
 };
 
 const getDashboard = callable<[], Dashboard>("get_dashboard");
-const prepareCompatibility = callable<[], Dashboard["runtime"]>("prepare_compatibility");
+const prepareCompatibility = callable<[], Dashboard["runtime"]>("prepare_default_compatibility");
+const getToolDownloadProgress = callable<[], ToolDownloadProgress>("tool_download_progress");
 const prepareHoYoPlayGameRuntime = callable<[gameId: string], { version: string; path: string }>("prepare_hoyoplay_game_runtime");
 const claimSteamInstallRequest = callable<[appId: number], { claimed: boolean }>("claim_steam_install_request");
 const installProviderTool = callable<[providerId: string], { version: string; path: string }>("install_provider_tool");
@@ -1426,6 +1437,8 @@ function applySteamLibraryPatch() {
 function NativeEpicInstallSection({ appId }: { appId: number }) {
   const [game, setGame] = useState<GameDetails | null>();
   const [job, setJob] = useState<InstallJob>();
+  const [runtimePreparing, setRuntimePreparing] = useState(false);
+  const [runtimeProgress, setRuntimeProgress] = useState<ToolDownloadProgress>();
   const [requiredBytes, setRequiredBytes] = useState<number | null>();
   const [error, setError] = useState<string>();
   const [modifiers, setModifiers] = useState<ModifierAvailability>({ lsfg: false, framegen: false });
@@ -1480,6 +1493,20 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
   useEffect(() => {
     void getLaunchModifierAvailability().then(setModifiers).catch(() => undefined);
   }, [appId]);
+
+  useEffect(() => {
+    if (!runtimePreparing) return;
+    let mounted = true;
+    const refreshProgress = () => void getToolDownloadProgress()
+      .then((value) => { if (mounted) setRuntimeProgress(value); })
+      .catch(() => undefined);
+    refreshProgress();
+    const timer = window.setInterval(refreshProgress, 500);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+    };
+  }, [runtimePreparing]);
 
   useEffect(() => {
     if (!game) return;
@@ -1573,14 +1600,16 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
         ?? Array.from(button.querySelectorAll<HTMLElement>("div")).find((node) => !node.querySelector("div"));
       if (label) {
         if (originalLabelText === undefined) originalLabelText = label.textContent ?? "";
-        const actionLabel = isOfficialLauncherGame
+        const actionLabel = runtimePreparing
+          ? t("preparingCompatibility")
+          : isOfficialLauncherGame
           ? t("launchOfficialClient", { provider: localizeBackend(game.provider_name) ?? game.provider_name })
           : action.label;
         if (label.textContent !== actionLabel) label.textContent = actionLabel;
       }
     };
     const updateProgress = (button: HTMLElement) => {
-      if (!active || !job) {
+      if ((!active || !job) && !runtimePreparing) {
         progressElement?.remove();
         progressElement = undefined;
         progressFill = undefined;
@@ -1605,10 +1634,11 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
         progressHost.appendChild(progressElement);
       }
       if (progressFill) {
-        progressFill.style.width = `${Math.max(1, Math.round(job.progress * 100))}%`;
+        const progress = runtimePreparing ? (runtimeProgress?.progress ?? .01) : (job?.progress ?? 0);
+        progressFill.style.width = `${Math.max(1, Math.round(progress * 100))}%`;
         progressFill.style.opacity = game.provider_id === "epic"
           ? "1"
-          : job.state === "paused" ? ".65" : "1";
+          : job?.state === "paused" ? ".65" : "1";
       }
     };
     const beginInstall = (path: string) => {
@@ -1629,11 +1659,16 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
       event.stopImmediatePropagation();
       if (isOfficialLauncherGame) {
         void (async () => {
-          await prepareHoYoPlayGameRuntime(game.external_game_id);
-          const apps = SteamClient.Apps as any;
-          if (typeof apps.RunGame !== "function") throw new Error("Steam RunGame API unavailable");
-          const runGameId = await waitForShortcutGameId(appId) ?? shortcutRunGameId(appId);
-          await apps.RunGame(runGameId, "", -1, 100);
+          setRuntimePreparing(true);
+          try {
+            await prepareHoYoPlayGameRuntime(game.external_game_id);
+            const apps = SteamClient.Apps as any;
+            if (typeof apps.RunGame !== "function") throw new Error("Steam RunGame API unavailable");
+            const runGameId = await waitForShortcutGameId(appId) ?? shortcutRunGameId(appId);
+            await apps.RunGame(runGameId, "", -1, 100);
+          } finally {
+            setRuntimePreparing(false);
+          }
         })().catch((reason) => setError(String(reason)));
       } else if (active && job) {
         const action = job.state === "paused" ? resumeInstall(job.id) : pauseInstall(job.id);
@@ -1645,7 +1680,7 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
       }
     };
     const managesNativeAction = isOfficialLauncherGame
-      ? !game.launchable
+      ? true
       : !game.installed || Boolean(game.update_available) || active;
     const attachToNativeButton = () => {
       if (!nativeActionStyle) {
@@ -1801,6 +1836,8 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
     job?.id,
     job?.state,
     job?.progress,
+    runtimePreparing,
+    runtimeProgress?.progress,
     modifiers.lsfg,
     modifiers.framegen,
   ]);
@@ -2081,6 +2118,7 @@ function PlayHistoryImportModal({ backups, onConfirm, closeModal }: { backups: P
 function Content() {
   const [dashboard, setDashboard] = useState<Dashboard | undefined>(() => cachedDashboard);
   const [preparingCompatibility, setPreparingCompatibility] = useState(false);
+  const [toolProgress, setToolProgress] = useState<ToolDownloadProgress>();
   const [error, setError] = useState<string>();
   const [operation, setOperation] = useState<{ providerId: string; label: string }>();
   const [cleaningUp, setCleaningUp] = useState(false);
@@ -2098,7 +2136,6 @@ function Content() {
   const [mihoyoRegion, setMihoyoRegion] = useState<"mihoyo_cn" | "mihoyo_bilibili" | "hoyoplay_global">("mihoyo_cn");
   const [changingMihoyoChannel, setChangingMihoyoChannel] = useState(false);
   const installLock = useRef(false);
-  const automaticCompatibilityAttempted = useRef(false);
 
   useEffect(() => {
     void getHoYoPlayChannelSelection().then((selection) => {
@@ -2315,17 +2352,20 @@ function Content() {
   }, [artworkBusy, steamGridDbKey]);
 
   useEffect(() => {
-    if (!dashboard || dashboard.runtime.ready || automaticCompatibilityAttempted.current) return;
-    automaticCompatibilityAttempted.current = true;
-    setPreparingCompatibility(true);
-    void withTimeout(prepareCompatibility(), 900000)
-      .then((runtime) => {
-        setDashboard((current) => current ? { ...current, runtime } : current);
-        if (cachedDashboard) cachedDashboard = { ...cachedDashboard, runtime };
-      })
-      .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))
-      .finally(() => setPreparingCompatibility(false));
-  }, [dashboard?.runtime.ready]);
+    const tracksTool = preparingCompatibility
+      || (operation?.providerId === "epic" && operation.label === t("installingLegendary"));
+    if (!tracksTool) return;
+    let mounted = true;
+    const refreshProgress = () => void getToolDownloadProgress()
+      .then((value) => { if (mounted) setToolProgress(value); })
+      .catch(() => undefined);
+    refreshProgress();
+    const timer = window.setInterval(refreshProgress, 500);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+    };
+  }, [preparingCompatibility, operation?.providerId, operation?.label]);
 
   if (!dashboard && !error) return <Spinner />;
 
@@ -2591,7 +2631,14 @@ function Content() {
             </div>
           </PanelSectionRow>
         )}
-        {operation && operation.providerId !== selectedMihoyoProvider?.id && <PanelSectionRow><OperationProgress label={operation.label} /></PanelSectionRow>}
+        {operation && operation.providerId !== selectedMihoyoProvider?.id && (
+          <PanelSectionRow>
+            <OperationProgress
+              label={operation.label}
+              progress={operation.providerId === "epic" && operation.label === t("installingLegendary") ? toolProgress : undefined}
+            />
+          </PanelSectionRow>
+        )}
         {!operation && (
           <PanelSectionRow>
             <Focusable flow-children="horizontal" style={{
@@ -2625,6 +2672,11 @@ function Content() {
               <span style={{ opacity: .7 }}>{preparingCompatibility ? t("preparingCompatibility") : t("runtimeNotReady")}</span>
             </div>
           </PanelSectionRow>
+          {preparingCompatibility && (
+            <PanelSectionRow>
+              <OperationProgress label={t("preparingCompatibility")} progress={toolProgress} />
+            </PanelSectionRow>
+          )}
           <PanelSectionRow>
             <DialogButton className={DASHBOARD_ACTION_CLASS} style={DASHBOARD_SECONDARY_BUTTON_STYLE} disabled={preparingCompatibility} onClick={() => void setupCompatibility()}>
               {preparingCompatibility ? t("preparingCompatibility") : t("prepareCompatibility")}
@@ -3122,14 +3174,52 @@ function compatibilityLabel(status: string): string {
   return labels[status] ?? status;
 }
 
-function OperationProgress({ label }: { label: string }) {
+function toolComponentLabel(component?: ToolDownloadProgress["component"]): string {
+  if (component === "umu") return t("compatComponentUmu");
+  if (component === "geproton") return t("compatComponentGeproton");
+  if (component === "dwproton") return t("compatComponentDwproton");
+  if (component === "legendary") return t("compatComponentLegendary");
+  return t("umuRuntime");
+}
+
+function toolProgressLabel(progress: ToolDownloadProgress): string {
+  const component = toolComponentLabel(progress.component);
+  if (progress.phase === "starting") return t("compatPhaseStarting");
+  if (progress.phase === "checking_runtime") return t("compatPhaseChecking");
+  if (progress.phase === "connecting") return t("compatPhaseConnecting");
+  if (progress.phase === "downloading") return t("compatPhaseDownloading", { component });
+  if (progress.phase === "verifying") return t("compatPhaseVerifying");
+  if (progress.phase === "installing") return t("compatPhaseInstalling", { component });
+  if (progress.phase === "complete") return t("compatPhaseComplete");
+  if (progress.phase === "failed") return t("compatPhaseFailed");
+  return t("preparingCompatibility");
+}
+
+function OperationProgress({ label, progress }: { label: string; progress?: ToolDownloadProgress }) {
+  const percentage = progress
+    ? Math.round(Math.max(0, Math.min(1, progress.progress ?? 0)) * 100)
+    : undefined;
   return (
     <div style={{ width: "100%", marginTop: 10, overflow: "hidden" }}>
       <style>{`@keyframes gamebridge-progress { from { transform: translateX(-110%); } to { transform: translateX(340%); } }`}</style>
-      <div style={{ marginBottom: 6, fontSize: 13, opacity: .85 }}>{label}</div>
-      <div style={{ width: "100%", height: 8, borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,.16)" }}>
-        <div style={{ width: "30%", height: "100%", borderRadius: 4, background: "#1a9fff", animation: "gamebridge-progress 1.25s ease-in-out infinite" }} />
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6, fontSize: 13, opacity: .85 }}>
+        <span>{progress ? toolProgressLabel(progress) : label}</span>
+        {percentage !== undefined && <span>{percentage}%</span>}
       </div>
+      <div style={{ width: "100%", height: 8, borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,.16)" }}>
+        <div style={progress ? {
+          width: `${Math.max(2, percentage ?? 0)}%`, height: "100%", borderRadius: 4,
+          background: "#1a9fff", transition: "width .25s ease",
+        } : {
+          width: "30%", height: "100%", borderRadius: 4,
+          background: "#1a9fff", animation: "gamebridge-progress 1.25s ease-in-out infinite",
+        }} />
+      </div>
+      {progress?.source && (
+        <div style={{ marginTop: 6, fontSize: 12, opacity: .68 }}>
+          {progress.source === "china" ? t("compatSourceChina") : t("compatSourceOfficial")}
+        </div>
+      )}
     </div>
   );
 }

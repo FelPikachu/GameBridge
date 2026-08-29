@@ -1,6 +1,6 @@
 [project]
 name = "gamebridge"
-version = "0.19.0-beta.4"
+version = "0.19.0-beta.5"
 description = "Provider-driven game library and compatibility platform for SteamOS"
 requires-python = ">=3.11"
 license = { text = "MPL-2.0" }

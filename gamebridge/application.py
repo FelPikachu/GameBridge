@@ -50,7 +50,9 @@ class GameBridgeApplication:
         self.jobs = InstallJobStore(self.database)
         self.providers = ProviderRegistry()
         self.tool_installer = ToolInstaller()
-        self.compatibility = CompatibilityManager(self.data_directory / "compatibility")
+        self.compatibility = CompatibilityManager(
+            self.data_directory / "compatibility", self.tool_installer
+        )
         self.cloud_saves = EpicCloudSaveManager(self.data_directory)
         self.epic_installs: EpicInstallManager | None = None
         self.simulated_updates: dict[str, asyncio.Task[None]] = {}
@@ -353,7 +355,13 @@ class GameBridgeApplication:
         }
 
     async def prepare_compatibility(self) -> dict[str, object]:
+        return await asyncio.to_thread(self.compatibility.prepare_base)
+
+    async def prepare_default_compatibility(self) -> dict[str, object]:
         return await asyncio.to_thread(self.compatibility.prepare)
+
+    def tool_download_progress(self) -> dict[str, object]:
+        return self.tool_installer.progress_status()
 
     async def prepare_hoyoplay_game_runtime(self, game_id: str) -> dict[str, str]:
         supported = {
