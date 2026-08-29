@@ -1521,7 +1521,11 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
     let originalPathFill: string | undefined;
     let statsElement: HTMLElement | undefined;
     let progressElement: HTMLElement | undefined;
+    let progressLabel: HTMLElement | undefined;
+    let progressPercent: HTMLElement | undefined;
+    let progressTrack: HTMLElement | undefined;
     let progressFill: HTMLElement | undefined;
+    let progressSource: HTMLElement | undefined;
     let progressHost: HTMLElement | undefined;
     let originalHostPosition = "";
     let originalHostOverflow = "";
@@ -1612,7 +1616,11 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
       if ((!active || !job) && !runtimePreparing) {
         progressElement?.remove();
         progressElement = undefined;
+        progressLabel = undefined;
+        progressPercent = undefined;
+        progressTrack = undefined;
         progressFill = undefined;
+        progressSource = undefined;
         return;
       }
       if (!progressElement) {
@@ -1624,21 +1632,43 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
         progressHost.style.overflow = "visible";
         progressElement = steamDocument.createElement("div");
         progressElement.dataset.gamebridgeDownloadProgress = "true";
-        progressElement.style.cssText = "position:absolute;left:0;top:calc(100% + 5px);width:100%;height:5px;border-radius:3px;background:rgba(255,255,255,.14);pointer-events:none;z-index:5;overflow:hidden";
+        progressElement.style.cssText = "position:absolute;left:0;top:calc(100% + 5px);width:100%;pointer-events:none;z-index:5";
+        const progressHeader = steamDocument.createElement("div");
+        progressHeader.style.cssText = "display:none;justify-content:space-between;gap:8px;margin-bottom:5px;font-size:12px;color:rgba(255,255,255,.82)";
+        progressLabel = steamDocument.createElement("span");
+        progressPercent = steamDocument.createElement("span");
+        progressHeader.append(progressLabel, progressPercent);
+        progressTrack = steamDocument.createElement("div");
+        progressTrack.style.cssText = "width:100%;height:5px;border-radius:3px;background:rgba(255,255,255,.14);overflow:hidden";
         progressFill = steamDocument.createElement("div");
         progressFill.style.cssText = "height:100%;border-radius:3px;transition:width .25s ease,opacity .2s ease";
         progressFill.style.background = game.provider_id === "epic"
           ? "#1a9fff"
           : nativeAccentBackground(button);
-        progressElement.appendChild(progressFill);
+        progressSource = steamDocument.createElement("div");
+        progressSource.style.cssText = "display:none;margin-top:5px;font-size:11px;color:rgba(255,255,255,.66)";
+        progressTrack.appendChild(progressFill);
+        progressElement.append(progressHeader, progressTrack, progressSource);
         progressHost.appendChild(progressElement);
       }
       if (progressFill) {
         const progress = runtimePreparing ? (runtimeProgress?.progress ?? .01) : (job?.progress ?? 0);
-        progressFill.style.width = `${Math.max(1, Math.round(progress * 100))}%`;
+        const percentage = Math.max(1, Math.round(progress * 100));
+        progressFill.style.width = `${percentage}%`;
         progressFill.style.opacity = game.provider_id === "epic"
           ? "1"
           : job?.state === "paused" ? ".65" : "1";
+        if (progressLabel?.parentElement && progressPercent && progressSource && progressTrack) {
+          progressLabel.parentElement.style.display = runtimePreparing ? "flex" : "none";
+          progressLabel.textContent = runtimeProgress
+            ? toolProgressLabel(runtimeProgress)
+            : t("preparingCompatibility");
+          progressPercent.textContent = `${percentage}%`;
+          progressSource.style.display = runtimePreparing && runtimeProgress?.source ? "block" : "none";
+          progressSource.textContent = runtimeProgress?.source === "china"
+            ? t("compatSourceChina")
+            : runtimeProgress?.source === "official" ? t("compatSourceOfficial") : "";
+        }
       }
     };
     const beginInstall = (path: string) => {
@@ -1838,6 +1868,9 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
     job?.progress,
     runtimePreparing,
     runtimeProgress?.progress,
+    runtimeProgress?.phase,
+    runtimeProgress?.source,
+    runtimeProgress?.component,
     modifiers.lsfg,
     modifiers.framegen,
   ]);
