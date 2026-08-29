@@ -13,7 +13,7 @@ EPIC_REDIRECT_URL = (
     "https://www.epicgames.com/id/api/redirect?"
     "clientId=34a02cf8f4414e29b15921876da36f9a&responseType=code"
 )
-EPIC_ACCOUNT_URL = "https://www.epicgames.com/account/personal?lang=zh-CN"
+EPIC_STORE_URL = "https://store.epicgames.com/zh-CN/"
 
 
 class EpicCorrectiveActionRequired(RuntimeError):
@@ -141,7 +141,7 @@ class SteamBrowserAuthorization:
                     code = await asyncio.to_thread(self._code_from_session, debugger)
                 except EpicCorrectiveActionRequired as exc:
                     if exc.action == "PRIVACY_POLICY_ACCEPTANCE" and not corrective_page_opened:
-                        await asyncio.to_thread(self._open_epic_account_page, debugger)
+                        await asyncio.to_thread(self._open_epic_privacy_page, debugger)
                         corrective_page_opened = True
                         continue
                     if exc.action == "PRIVACY_POLICY_ACCEPTANCE":
@@ -266,11 +266,11 @@ class SteamBrowserAuthorization:
         return cls._extract_code(text)
 
     @classmethod
-    def _open_epic_account_page(cls, websocket_url: str) -> None:
+    def _open_epic_privacy_page(cls, websocket_url: str) -> None:
         cls._cdp_command(
             websocket_url,
             "Page.navigate",
-            {"url": EPIC_ACCOUNT_URL},
+            {"url": EPIC_STORE_URL},
         )
 
     @classmethod

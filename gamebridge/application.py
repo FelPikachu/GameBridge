@@ -14,8 +14,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from . import __version__
-from .compatibility import CompatibilityManager
 from .cloud_saves import EpicCloudSaveManager
+from .compatibility import CompatibilityManager
 from .database import Database
 from .install import EpicInstallManager
 from .jobs import InstallJobStore
@@ -557,6 +557,38 @@ class GameBridgeApplication:
         provider = self.providers.get(provider_id)
         games = await provider.library()
         with self.database.connect() as db:
+            if provider_id == "epic":
+                current_releases = {
+                    (game.external_game_id, game.region, game.release_channel)
+                    for game in games
+                }
+                existing_releases = db.execute(
+                    "SELECT id, canonical_game_id, external_game_id, region, release_channel "
+                    "FROM game_releases WHERE provider_id=?",
+                    (provider_id,),
+                ).fetchall()
+                stale_releases = [
+                    row
+                    for row in existing_releases
+                    if (
+                        str(row["external_game_id"]),
+                        str(row["region"]),
+                        str(row["release_channel"]),
+                    )
+                    not in current_releases
+                ]
+                db.executemany(
+                    "DELETE FROM game_releases WHERE id=?",
+                    ((int(row["id"]),) for row in stale_releases),
+                )
+                db.executemany(
+                    "DELETE FROM catalog_games WHERE id=? AND NOT EXISTS "
+                    "(SELECT 1 FROM game_releases WHERE canonical_game_id=?)",
+                    (
+                        (str(row["canonical_game_id"]), str(row["canonical_game_id"]))
+                        for row in stale_releases
+                    ),
+                )
             for game in games:
                 canonical_id = f"{game.provider_id}:{game.external_game_id}"
                 normalized_title = " ".join(game.title.casefold().split())

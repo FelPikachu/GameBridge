@@ -6,6 +6,7 @@ import pytest
 
 import gamebridge.application as application_module
 from gamebridge.application import GameBridgeApplication
+from gamebridge.models import GameReference
 from gamebridge.providers.hoyoplay import HoYoPlayProvider
 
 
@@ -347,6 +348,71 @@ def test_steam_library_returns_epic_accounts_larger_than_one_page(tmp_path):
     assert {game["external_game_id"] for game in games} == {
         f"large-{index:02d}" for index in range(61)
     }
+
+
+@pytest.mark.asyncio
+async def test_epic_sync_replaces_previous_account_library_without_deleting_installs(
+    tmp_path, monkeypatch
+):
+    application = GameBridgeApplication(tmp_path)
+    application.start()
+    provider = application.providers.get("epic")
+    with application.database.connect() as db:
+        for external_id in ("old-one", "old-two"):
+            canonical_id = f"epic:{external_id}"
+            db.execute(
+                "INSERT INTO catalog_games(id,title,normalized_title) VALUES(?,?,?)",
+                (canonical_id, external_id, external_id),
+            )
+            db.execute(
+                "INSERT INTO game_releases"
+                "(canonical_game_id,provider_id,external_game_id,region,release_channel) "
+                "VALUES(?,?,?,?,?)",
+                (canonical_id, "epic", external_id, "global", "stable"),
+            )
+        db.execute(
+            "INSERT INTO steam_shortcuts(provider_id,external_game_id,steam_app_id) "
+            "VALUES(?,?,?)",
+            ("epic", "old-one", 123456),
+        )
+    installed_file = provider.data_directory / "config/legendary/installed.json"
+    installed_file.parent.mkdir(parents=True, exist_ok=True)
+    installed_file.write_text('{"old-one":{"install_path":"/games/old"}}', encoding="utf-8")
+
+    async def current_library():
+        return [GameReference("epic", "new-one", "New Account Game")]
+
+    async def no_updates():
+        return {}
+
+    async def no_artwork(_games):
+        return None
+
+    monkeypatch.setattr(provider, "library", current_library)
+    monkeypatch.setattr(provider, "check_updates", no_updates)
+    monkeypatch.setattr(application, "_resolve_steam_artwork", no_artwork)
+
+    assert await application.sync_provider_library("epic") == {
+        "count": 1,
+        "artworkCount": 0,
+    }
+    with application.database.connect() as db:
+        releases = db.execute(
+            "SELECT external_game_id FROM game_releases WHERE provider_id='epic'"
+        ).fetchall()
+        shortcuts = db.execute(
+            "SELECT external_game_id FROM steam_shortcuts WHERE provider_id='epic'"
+        ).fetchall()
+        stale_catalog = db.execute(
+            "SELECT id FROM catalog_games WHERE id IN ('epic:old-one','epic:old-two')"
+        ).fetchall()
+
+    assert [row["external_game_id"] for row in releases] == ["new-one"]
+    assert [row["external_game_id"] for row in shortcuts] == ["old-one"]
+    assert stale_catalog == []
+    assert installed_file.read_text(encoding="utf-8") == (
+        '{"old-one":{"install_path":"/games/old"}}'
+    )
 
 
 @pytest.mark.asyncio
