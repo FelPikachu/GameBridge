@@ -1634,7 +1634,7 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
         progressElement.dataset.gamebridgeDownloadProgress = "true";
         progressElement.style.cssText = "position:absolute;left:0;top:calc(100% + 5px);width:100%;pointer-events:none;z-index:5";
         const progressHeader = steamDocument.createElement("div");
-        progressHeader.style.cssText = "display:none;justify-content:space-between;gap:8px;margin-bottom:5px;font-size:12px;color:rgba(255,255,255,.82)";
+        progressHeader.style.cssText = "display:none;justify-content:space-between;gap:8px;margin-top:5px;font-size:12px;color:rgba(255,255,255,.82)";
         progressLabel = steamDocument.createElement("span");
         progressPercent = steamDocument.createElement("span");
         progressHeader.append(progressLabel, progressPercent);
@@ -1648,7 +1648,7 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
         progressSource = steamDocument.createElement("div");
         progressSource.style.cssText = "display:none;margin-top:5px;font-size:11px;color:rgba(255,255,255,.66)";
         progressTrack.appendChild(progressFill);
-        progressElement.append(progressHeader, progressTrack, progressSource);
+        progressElement.append(progressTrack, progressHeader, progressSource);
         progressHost.appendChild(progressElement);
       }
       if (progressFill) {
@@ -3235,10 +3235,6 @@ function OperationProgress({ label, progress }: { label: string; progress?: Tool
   return (
     <div style={{ width: "100%", marginTop: 10, overflow: "hidden" }}>
       <style>{`@keyframes gamebridge-progress { from { transform: translateX(-110%); } to { transform: translateX(340%); } }`}</style>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 6, fontSize: 13, opacity: .85 }}>
-        <span>{progress ? toolProgressLabel(progress) : label}</span>
-        {percentage !== undefined && <span>{percentage}%</span>}
-      </div>
       <div style={{ width: "100%", height: 8, borderRadius: 4, overflow: "hidden", background: "rgba(255,255,255,.16)" }}>
         <div style={progress ? {
           width: `${Math.max(2, percentage ?? 0)}%`, height: "100%", borderRadius: 4,
@@ -3247,6 +3243,10 @@ function OperationProgress({ label, progress }: { label: string; progress?: Tool
           width: "30%", height: "100%", borderRadius: 4,
           background: "#1a9fff", animation: "gamebridge-progress 1.25s ease-in-out infinite",
         }} />
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 6, fontSize: 13, opacity: .85 }}>
+        <span>{progress ? toolProgressLabel(progress) : label}</span>
+        {percentage !== undefined && <span>{percentage}%</span>}
       </div>
       {progress?.source && (
         <div style={{ marginTop: 6, fontSize: 12, opacity: .68 }}>

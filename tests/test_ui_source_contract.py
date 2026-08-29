@@ -238,6 +238,7 @@ def test_compatibility_preparation_is_automatic_and_allows_runtime_download() ->
     assert "runtimeProgress?.progress" in SOURCE
     assert "toolProgressLabel(runtimeProgress)" in SOURCE
     assert 'runtimeProgress?.source === "china"' in SOURCE
+    assert "progressElement.append(progressTrack, progressHeader, progressSource)" in SOURCE
 
 
 def test_hoyoplay_runtime_is_ready_before_first_shortcut_profile_is_read() -> None:
