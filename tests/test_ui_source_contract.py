@@ -252,6 +252,13 @@ def test_beta5_managed_components_use_routed_progress_in_native_order() -> None:
     assert track < status < source
 
 
+def test_ready_hoyoplay_native_action_uses_steam_play_label_and_icon() -> None:
+    section = SOURCE[SOURCE.index("const updateNativeActionButton"):SOURCE.index("const updateProgress")]
+    assert 'steamT("#GameAction_Play", "play")' in section
+    assert "if (!isOfficialLauncherGame)" in section
+    assert 't("launchOfficialClient"' not in section
+
+
 def test_hoyoplay_runtime_is_ready_before_first_shortcut_profile_is_read() -> None:
     section = SOURCE.split("const openNativeDetails", 1)[1].split(
         "const moveGameGridFocus", 1

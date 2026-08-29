@@ -1596,8 +1596,10 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
         if (path) {
           if (originalPathData === undefined) originalPathData = path.getAttribute("d") ?? "";
           if (originalPathFill === undefined) originalPathFill = path.getAttribute("fill") ?? "";
-          path.setAttribute("d", action.path);
-          path.setAttribute("fill", "currentColor");
+          if (!isOfficialLauncherGame) {
+            path.setAttribute("d", action.path);
+            path.setAttribute("fill", "currentColor");
+          }
         }
       }
       const label = button.querySelector<HTMLElement>("svg + div")
@@ -1607,7 +1609,7 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
         const actionLabel = runtimePreparing
           ? t("preparingCompatibility")
           : isOfficialLauncherGame
-          ? t("launchOfficialClient", { provider: localizeBackend(game.provider_name) ?? game.provider_name })
+          ? steamT("#GameAction_Play", "play")
           : action.label;
         if (label.textContent !== actionLabel) label.textContent = actionLabel;
       }

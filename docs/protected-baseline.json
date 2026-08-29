@@ -58,6 +58,7 @@
     "tests/test_ui_source_contract.py": [
       "test_epic_sync_refreshes_the_library_tab_cache_and_count",
       "test_beta5_managed_components_use_routed_progress_in_native_order",
+      "test_ready_hoyoplay_native_action_uses_steam_play_label_and_icon",
       "test_first_custom_compat_tool_install_prompts_for_one_restart",
       "test_bh3_hotfix_install_is_claimed_and_continued_by_steam"
     ]
