@@ -12,6 +12,10 @@
     {
       "name": "beta5 ready HoYoPlay native play action",
       "gitCommit": "46a1ff7c84c2304e0c689d6e2cedc7ebfe0e1836"
+    },
+    {
+      "name": "beta5 bright download progress rendering",
+      "gitCommit": "52376158747133b880c2541abf2b469421b5f5ce"
     }
   ],
   "requiredTests": {
