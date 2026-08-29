@@ -1,4 +1,10 @@
-from gamebridge.steam_browser import SteamBrowserAuthorization
+import pytest
+
+from gamebridge.steam_browser import (
+    EPIC_ACCOUNT_URL,
+    EpicCorrectiveActionRequired,
+    SteamBrowserAuthorization,
+)
 
 
 def test_extracts_epic_code_directly_from_browser_page(monkeypatch) -> None:
@@ -22,6 +28,80 @@ def test_extracts_epic_code_directly_from_browser_page(monkeypatch) -> None:
 
     assert code == "browser-page-code"
     assert calls == ["Runtime.evaluate"]
+
+
+def test_detects_epic_privacy_policy_without_exposing_continuation(monkeypatch) -> None:
+    def command(cls, websocket_url, method, params=None):
+        if method == "Runtime.evaluate":
+            return {"result": {"value": (
+                '{"errorCode":"errors.com.epicgames.oauth.corrective_action_required",'
+                '"metadata":{"correctiveAction":"PRIVACY_POLICY_ACCEPTANCE",'
+                '"continuation":"private-one-time-value"}}'
+            )}}
+        raise AssertionError(f"unexpected fallback call: {method}")
+
+    monkeypatch.setattr(SteamBrowserAuthorization, "_cdp_command", classmethod(command))
+
+    with pytest.raises(EpicCorrectiveActionRequired) as raised:
+        SteamBrowserAuthorization._code_from_session(
+            "ws://127.0.0.1:8080/devtools/page/epic"
+        )
+
+    assert raised.value.action == "PRIVACY_POLICY_ACCEPTANCE"
+    assert "private-one-time-value" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_privacy_policy_flow_opens_account_page_once_then_returns_code(monkeypatch) -> None:
+    browser = SteamBrowserAuthorization()
+    results: list[object] = [
+        EpicCorrectiveActionRequired("PRIVACY_POLICY_ACCEPTANCE"),
+        None,
+        "accepted-code",
+    ]
+    opened: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(browser, "_json_pages", lambda: [
+        {"webSocketDebuggerUrl": "ws://127.0.0.1:8080/devtools/page/epic"}
+    ])
+
+    def code_from_session(websocket_url: str):
+        result = results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(browser, "_code_from_session", code_from_session)
+    async def no_wait(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr("gamebridge.steam_browser.asyncio.sleep", no_wait)
+    monkeypatch.setattr(
+        browser,
+        "_open_epic_account_page",
+        lambda websocket_url: opened.append((websocket_url, EPIC_ACCOUNT_URL)),
+    )
+
+    assert await browser._poll() == "accepted-code"
+    assert opened == [
+        ("ws://127.0.0.1:8080/devtools/page/epic", EPIC_ACCOUNT_URL)
+    ]
+
+
+def test_corrective_action_navigation_uses_official_epic_account_page(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, object] | None]] = []
+
+    def command(cls, websocket_url, method, params=None):
+        calls.append((method, params))
+        return {}
+
+    monkeypatch.setattr(SteamBrowserAuthorization, "_cdp_command", classmethod(command))
+
+    SteamBrowserAuthorization._open_epic_account_page(
+        "ws://127.0.0.1:8080/devtools/page/epic"
+    )
+
+    assert calls == [("Page.navigate", {"url": EPIC_ACCOUNT_URL})]
 
 
 def test_delete_epic_cookies_only(monkeypatch) -> None:

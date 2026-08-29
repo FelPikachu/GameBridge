@@ -9,11 +9,19 @@ import struct
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-
 EPIC_REDIRECT_URL = (
     "https://www.epicgames.com/id/api/redirect?"
     "clientId=34a02cf8f4414e29b15921876da36f9a&responseType=code"
 )
+EPIC_ACCOUNT_URL = "https://www.epicgames.com/account/personal?lang=zh-CN"
+
+
+class EpicCorrectiveActionRequired(RuntimeError):
+    """Epic requires an account-owner action before issuing an auth code."""
+
+    def __init__(self, action: str) -> None:
+        super().__init__("epic.corrective_action_required")
+        self.action = action
 
 
 class SteamBrowserAuthorization:
@@ -122,6 +130,7 @@ class SteamBrowserAuthorization:
         raise RuntimeError("Steam browser debugger has no usable page")
 
     async def _poll(self) -> str:
+        corrective_page_opened = False
         while True:
             pages = await asyncio.to_thread(self._json_pages)
             for page in pages:
@@ -130,11 +139,21 @@ class SteamBrowserAuthorization:
                     continue
                 try:
                     code = await asyncio.to_thread(self._code_from_session, debugger)
+                except EpicCorrectiveActionRequired as exc:
+                    if exc.action == "PRIVACY_POLICY_ACCEPTANCE" and not corrective_page_opened:
+                        await asyncio.to_thread(self._open_epic_account_page, debugger)
+                        corrective_page_opened = True
+                        continue
+                    if exc.action == "PRIVACY_POLICY_ACCEPTANCE":
+                        continue
+                    raise
                 except (OSError, RuntimeError, ValueError, json.JSONDecodeError, HTTPError, URLError):
                     continue
                 if code:
                     return code
-            await asyncio.sleep(0.3)
+            # Once the account page is open, a slower retry is enough to notice
+            # that the user accepted Epic's policy without hammering its API.
+            await asyncio.sleep(2 if corrective_page_opened else 0.3)
 
     def _json_pages(self) -> list[dict[str, object]]:
         try:
@@ -200,6 +219,9 @@ class SteamBrowserAuthorization:
                 code = cls._extract_code(page_text)
                 if code:
                     return code
+                corrective_action = cls._extract_corrective_action(page_text)
+                if corrective_action:
+                    raise EpicCorrectiveActionRequired(corrective_action)
 
         # Compatibility fallback for older CEF builds where Runtime.evaluate
         # cannot expose the external page's body.
@@ -232,9 +254,24 @@ class SteamBrowserAuthorization:
         if xsrf:
             headers["X-XSRF-TOKEN"] = xsrf
         request = Request(EPIC_REDIRECT_URL, headers=headers)
-        with urlopen(request, timeout=5) as response:
-            text = response.read(1_000_000).decode("utf-8", errors="replace")
+        try:
+            with urlopen(request, timeout=5) as response:
+                text = response.read(1_000_000).decode("utf-8", errors="replace")
+        except HTTPError as exc:
+            text = exc.read(1_000_000).decode("utf-8", errors="replace")
+            corrective_action = cls._extract_corrective_action(text)
+            if corrective_action:
+                raise EpicCorrectiveActionRequired(corrective_action) from exc
+            raise
         return cls._extract_code(text)
+
+    @classmethod
+    def _open_epic_account_page(cls, websocket_url: str) -> None:
+        cls._cdp_command(
+            websocket_url,
+            "Page.navigate",
+            {"url": EPIC_ACCOUNT_URL},
+        )
 
     @classmethod
     def _delete_epic_cookies(cls, websocket_url: str) -> int:
@@ -304,6 +341,22 @@ class SteamBrowserAuthorization:
             return None
         value = payload.get("authorizationCode") or payload.get("code")
         return value.strip() if isinstance(value, str) and value.strip() else None
+
+    @staticmethod
+    def _extract_corrective_action(text: str) -> str | None:
+        try:
+            payload = json.loads(text.strip())
+        except ValueError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if payload.get("errorCode") != "errors.com.epicgames.oauth.corrective_action_required":
+            return None
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        action = metadata.get("correctiveAction")
+        return action.strip() if isinstance(action, str) and action.strip() else None
 
     @staticmethod
     def _read_until(connection: socket.socket, marker: bytes) -> bytes:

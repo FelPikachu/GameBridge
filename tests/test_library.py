@@ -2,10 +2,11 @@ import base64
 import struct
 from pathlib import Path
 
+import pytest
+
 import gamebridge.application as application_module
 from gamebridge.application import GameBridgeApplication
 from gamebridge.providers.hoyoplay import HoYoPlayProvider
-import pytest
 
 
 @pytest.mark.asyncio
@@ -73,6 +74,52 @@ def test_library_search_and_pagination(tmp_path):
     assert len(first["items"]) == 1
     assert first["items"][0]["title"] == "Alpha Game"
     assert second["items"][0]["title"] == "Alpha Two"
+
+
+@pytest.mark.asyncio
+async def test_epic_login_returns_from_browser_after_user_account_action(tmp_path, monkeypatch):
+    application = GameBridgeApplication(tmp_path)
+    application.start()
+    provider = application.providers.get("epic")
+    calls: list[str] = []
+
+    class FakeBrowser:
+        async def wait_for_external_route(self):
+            calls.append("browser-open")
+
+        async def wait_for_epic_code(self):
+            calls.append("user-accepted")
+            return "private-code"
+
+        async def navigate_back(self):
+            calls.append("browser-closed")
+
+    async def fake_authenticate(code):
+        assert code == "private-code"
+        calls.append("authenticated")
+
+    async def fake_sync(provider_id):
+        assert provider_id == "epic"
+        calls.append("synced")
+
+    async def fake_status():
+        calls.append("status")
+        return {"state": "connected"}
+
+    monkeypatch.setattr(application_module, "SteamBrowserAuthorization", FakeBrowser)
+    monkeypatch.setattr(provider, "authenticate", fake_authenticate)
+    monkeypatch.setattr(application, "sync_provider_library", fake_sync)
+    monkeypatch.setattr(provider, "connection_status", fake_status)
+
+    assert await application.automatic_epic_login() == {"state": "connected"}
+    assert calls == [
+        "browser-open",
+        "user-accepted",
+        "authenticated",
+        "browser-closed",
+        "synced",
+        "status",
+    ]
 
 
 @pytest.mark.asyncio
