@@ -8,6 +8,10 @@
     {
       "name": "beta5 routed on-demand compatibility progress",
       "gitCommit": "5bb807e41572bcf78a8a3f35c93f65b8b33229bd"
+    },
+    {
+      "name": "beta5 ready HoYoPlay native play action",
+      "gitCommit": "46a1ff7c84c2304e0c689d6e2cedc7ebfe0e1836"
     }
   ],
   "requiredTests": {
