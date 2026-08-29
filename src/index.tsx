@@ -125,7 +125,7 @@ const getToolDownloadProgress = callable<[], ToolDownloadProgress>("tool_downloa
 const prepareHoYoPlayGameRuntime = callable<[gameId: string], { version: string; path: string }>("prepare_hoyoplay_game_runtime");
 const claimSteamInstallRequest = callable<[appId: number], { claimed: boolean }>("claim_steam_install_request");
 const installProviderTool = callable<[providerId: string], { version: string; path: string }>("install_provider_tool");
-const automaticEpicLogin = callable<[], { state: string }>("automatic_epic_login");
+const automaticEpicLogin = callable<[], { state: string; libraryCount?: number }>("automatic_epic_login");
 const syncProviderLibrary = callable<[providerId: string], { count: number }>("sync_provider_library");
 const refreshProviderStatus = callable<[providerId: string], { state: string }>("refresh_provider_status");
 const logoutProvider = callable<[providerId: string], { state: string; browserSessionCleared?: boolean }>("logout_provider");
@@ -2167,6 +2167,7 @@ function Content() {
   const [cloudSaveGamesLoading, setCloudSaveGamesLoading] = useState(true);
   const [cloudSaveBusyGame, setCloudSaveBusyGame] = useState<string>();
   const [cloudSaveGamesExpanded, setCloudSaveGamesExpanded] = useState(false);
+  const [librarySyncMessage, setLibrarySyncMessage] = useState<string>();
   const [mihoyoRegion, setMihoyoRegion] = useState<"mihoyo_cn" | "mihoyo_bilibili" | "hoyoplay_global">("mihoyo_cn");
   const [changingMihoyoChannel, setChangingMihoyoChannel] = useState(false);
   const installLock = useRef(false);
@@ -2223,12 +2224,16 @@ function Content() {
         await withTimeout(installProviderTool("epic"), 120000);
       }
       setOperation({ providerId: "epic", label: t("validatingEpic") });
+      setLibrarySyncMessage(undefined);
       const authentication = automaticEpicLogin();
       Navigation.NavigateToExternalWeb(EPIC_LOGIN_URL);
-      await withTimeout(authentication, 360000);
+      const result = await withTimeout(authentication, 360000);
       (Navigation as typeof Navigation & { NavigateBack?: () => void }).NavigateBack?.();
       await refresh();
       await refreshSteamLibraryGameCache();
+      if (typeof result.libraryCount === "number") {
+        setLibrarySyncMessage(t("librarySyncComplete", { count: result.libraryCount }));
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -2287,21 +2292,30 @@ function Content() {
   }, [refresh]);
 
   const syncAllLibraries = useCallback(async () => {
-    if (installLock.current) return;
+    if (installLock.current) {
+      setLibrarySyncMessage(t("librarySyncBusy"));
+      return;
+    }
     const providers = dashboard?.providers.filter((provider) =>
       provider.status.state === "connected" && provider.capabilities.owned_library) ?? [];
     if (providers.length === 0) return;
     try {
       installLock.current = true;
       setError(undefined);
+      setLibrarySyncMessage(undefined);
       setOperation({ providerId: "all", label: t("syncingLibrary") });
+      let synchronizedGames = 0;
       for (const provider of providers) {
-        await withTimeout(syncProviderLibrary(provider.id), 180000);
+        const result = await withTimeout(syncProviderLibrary(provider.id), 180000);
+        synchronizedGames += result.count;
       }
       await refresh();
       await refreshSteamLibraryGameCache();
+      setLibrarySyncMessage(t("librarySyncComplete", { count: synchronizedGames }));
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      const raw = reason instanceof Error ? reason.message : String(reason);
+      setError(raw);
+      setLibrarySyncMessage(t("librarySyncFailed", { error: localizeBackend(raw) ?? raw }));
     } finally {
       installLock.current = false;
       setOperation(undefined);
@@ -2695,6 +2709,11 @@ function Content() {
                 </span>
               </DialogButton>
             </Focusable>
+          </PanelSectionRow>
+        )}
+        {librarySyncMessage && (
+          <PanelSectionRow>
+            <div style={{ width: "100%", fontSize: 12, opacity: .72, lineHeight: 1.45 }}>{librarySyncMessage}</div>
           </PanelSectionRow>
         )}
       </PanelSection>

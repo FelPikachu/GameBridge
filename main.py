@@ -61,7 +61,16 @@ class Plugin:
         return await self.app.authenticate_epic(authorization_code)
 
     async def automatic_epic_login(self) -> dict[str, object]:
-        result = await self.app.automatic_epic_login()
+        decky.logger.info("Epic automatic login started")
+        try:
+            result = await self.app.automatic_epic_login()
+        except Exception:
+            decky.logger.exception("Epic automatic login or initial library sync failed")
+            raise
+        decky.logger.info(
+            "Epic automatic login completed games=%d",
+            int(result.get("libraryCount", 0)),
+        )
         self._queue_artwork_refresh("epic")
         return result
 
@@ -103,9 +112,16 @@ class Plugin:
     async def sync_provider_library(self, provider_id: str) -> dict[str, int]:
         # Library/catalog persistence belongs to the RPC. Network artwork work
         # is queued separately so the Decky route can always return promptly.
-        result = await self.app.sync_provider_library(
-            provider_id, resolve_artwork=False
-        )
+        decky.logger.info("Provider library sync started provider=%s", provider_id)
+        try:
+            result = await self.app.sync_provider_library(
+                provider_id, resolve_artwork=False
+            )
+        except Exception:
+            decky.logger.exception(
+                "Provider library sync failed provider=%s", provider_id
+            )
+            raise
         decky.logger.info(
             "Provider library sync provider=%s games=%d",
             provider_id,

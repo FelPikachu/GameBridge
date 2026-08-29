@@ -102,6 +102,7 @@ async def test_epic_login_returns_from_browser_after_user_account_action(tmp_pat
     async def fake_sync(provider_id):
         assert provider_id == "epic"
         calls.append("synced")
+        return {"count": 7}
 
     async def fake_status():
         calls.append("status")
@@ -112,7 +113,10 @@ async def test_epic_login_returns_from_browser_after_user_account_action(tmp_pat
     monkeypatch.setattr(application, "sync_provider_library", fake_sync)
     monkeypatch.setattr(provider, "connection_status", fake_status)
 
-    assert await application.automatic_epic_login() == {"state": "connected"}
+    assert await application.automatic_epic_login() == {
+        "state": "connected",
+        "libraryCount": 7,
+    }
     assert calls == [
         "browser-open",
         "user-accepted",

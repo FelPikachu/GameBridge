@@ -332,3 +332,6 @@ def test_epic_sync_refreshes_the_library_tab_cache_and_count() -> None:
     assert "await refreshSteamLibraryGameCache();" in SOURCE
     assert "window.dispatchEvent(new Event(GAMEBRIDGE_LIBRARY_UPDATED))" in SOURCE
     assert "window.addEventListener(GAMEBRIDGE_DASHBOARD_UPDATED, update)" in SOURCE
+    assert 'setLibrarySyncMessage(t("librarySyncBusy"))' in SOURCE
+    assert 'setLibrarySyncMessage(t("librarySyncComplete", { count: synchronizedGames }))' in SOURCE
+    assert 'setLibrarySyncMessage(t("librarySyncFailed", { error:' in SOURCE
