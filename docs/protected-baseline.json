@@ -16,6 +16,10 @@
     {
       "name": "beta5 bright download progress rendering",
       "gitCommit": "52376158747133b880c2541abf2b469421b5f5ce"
+    },
+    {
+      "name": "beta5 all-user external storage mapping",
+      "gitCommit": "36749e263b3a192684cd890170130f68569e1d80"
     }
   ],
   "requiredTests": {
