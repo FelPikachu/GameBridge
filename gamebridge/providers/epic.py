@@ -16,6 +16,9 @@ from ..process import ProcessError, SafeProcessRunner
 from ..provider import GameProvider
 
 
+EPIC_LIBRARY_OUTPUT_LIMIT = 64 * 1024 * 1024
+
+
 class EpicProvider(GameProvider):
     provider_id = "epic"
     display_name = "Epic Games"
@@ -191,7 +194,11 @@ class EpicProvider(GameProvider):
             raise RuntimeError("legendary.not_installed")
         try:
             result = await self.runner.run(
-                executable, "list", "--json", environment=self.environment()
+                executable,
+                "list",
+                "--json",
+                environment=self.environment(),
+                output_limit=EPIC_LIBRARY_OUTPUT_LIMIT,
             )
         except (ProcessError, OSError, RuntimeError) as exc:
             raise RuntimeError("epic.sync_failed") from exc

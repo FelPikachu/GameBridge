@@ -35,6 +35,7 @@ class SafeProcessRunner:
         environment: dict[str, str] | None = None,
         check: bool = True,
         sensitive_arguments: frozenset[int] = frozenset(),
+        output_limit: int | None = None,
     ) -> ProcessResult:
         executable_path = Path(executable).expanduser().resolve()  # noqa: ASYNC240
         if not executable_path.is_file() or not os.access(executable_path, os.X_OK):
@@ -60,7 +61,13 @@ class SafeProcessRunner:
             process.kill()
             await process.wait()
             raise TimeoutError(f"command timed out after {self.timeout:g}s") from None
-        if len(stdout_bytes) > self.output_limit or len(stderr_bytes) > self.output_limit:
+        effective_output_limit = self.output_limit if output_limit is None else output_limit
+        if effective_output_limit <= 0:
+            raise ValueError("output_limit must be positive")
+        if (
+            len(stdout_bytes) > effective_output_limit
+            or len(stderr_bytes) > effective_output_limit
+        ):
             raise RuntimeError("command output exceeded safety limit")
         sensitive_values = tuple(
             arguments[index]

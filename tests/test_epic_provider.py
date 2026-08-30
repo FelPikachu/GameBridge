@@ -8,12 +8,16 @@ from gamebridge.providers.epic import EpicProvider
 
 
 class FakeRunner:
+    def __init__(self):
+        self.library_output_limit = None
+
     async def run(self, executable, *arguments, **kwargs):
         if arguments == ("--version",):
             return ProcessResult((str(executable), *arguments), 0, "legendary 0.20.99\n", "")
         if arguments[0] == "status":
             payload = {"logged_in": True, "account": {"displayName": "Deck User", "id": "1"}}
             return ProcessResult((str(executable), *arguments), 0, json.dumps(payload), "")
+        self.library_output_limit = kwargs.get("output_limit")
         payload = [{"app_name": "SampleApp", "app_title": "Sample Game"}]
         return ProcessResult((str(executable), *arguments), 0, json.dumps(payload), "")
 
@@ -71,13 +75,15 @@ async def connected_status():
 async def test_epic_status_and_library(tmp_path, monkeypatch):
     executable = tmp_path / "legendary"
     executable.touch(mode=0o755)
-    provider = EpicProvider(tmp_path / "data", runner=FakeRunner())
+    runner = FakeRunner()
+    provider = EpicProvider(tmp_path / "data", runner=runner)
     monkeypatch.setattr(provider, "executable", lambda: executable)
     status = await provider.connection_status()
     games = await provider.library()
     assert status["state"] == "connected"
     assert status["account"] == "Deck User"
     assert games[0].external_game_id == "SampleApp"
+    assert runner.library_output_limit == 64 * 1024 * 1024
 
 
 @pytest.mark.asyncio
