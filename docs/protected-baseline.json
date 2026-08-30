@@ -24,6 +24,10 @@
     {
       "name": "beta5 Epic account library replacement",
       "gitCommit": "e5470ad49c59fc025d975099671e52079f8084ed"
+    },
+    {
+      "name": "beta5 large Epic library sync",
+      "gitCommit": "dda2146"
     }
   ],
   "requiredTests": {
@@ -69,6 +73,9 @@
     "tests/test_epic_provider.py": [
       "test_epic_status_and_library",
       "test_epic_uninstall_uses_legendary"
+    ],
+    "tests/test_process.py": [
+      "test_process_runner_allows_a_larger_limit_for_one_bounded_command"
     ],
     "tests/test_cloud_saves.py": [
       "test_nonempty_local_save_uploads_and_creates_backup"
