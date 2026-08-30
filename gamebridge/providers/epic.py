@@ -16,7 +16,7 @@ from ..process import ProcessError, SafeProcessRunner
 from ..provider import GameProvider
 
 
-EPIC_LIBRARY_OUTPUT_LIMIT = 64 * 1024 * 1024
+EPIC_LIBRARY_OUTPUT_LIMIT = 128 * 1024 * 1024
 
 
 class EpicProvider(GameProvider):

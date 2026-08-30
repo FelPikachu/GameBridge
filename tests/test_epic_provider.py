@@ -83,7 +83,7 @@ async def test_epic_status_and_library(tmp_path, monkeypatch):
     assert status["state"] == "connected"
     assert status["account"] == "Deck User"
     assert games[0].external_game_id == "SampleApp"
-    assert runner.library_output_limit == 64 * 1024 * 1024
+    assert runner.library_output_limit == 128 * 1024 * 1024
 
 
 @pytest.mark.asyncio
