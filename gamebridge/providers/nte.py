@@ -42,20 +42,15 @@ NTE_CN_INSTALLER_URL = (
     "YH_common_setup_1.0.4.0415_20260416.exe"
 )
 
-# Steam App ID assigned to NTE: Neverness to Everness. Captured 2026-10-10
-# from https://store.steampowered.com/app/4508340/NTE_Neverness_to_Everness
-# and https://steamdb.info/app/4508340. The Steam scope only ever owns this
-# one ID; any change must be verified on a real Steam Deck before merging.
-NTE_STEAM_APP_ID = 4508340
-
-
+# NTE is a single-title provider. The CN scope owns the wanmei-hosted PC
+# launcher and downloads it from the same wmupd CDN that backs
+# ``yh.wanmei.com``. The international release is distributed by Steam
+# under App ID 4508340, so GameBridge does not register a parallel
+# ``nte_steam`` scope: Steam's own library card and download flow already
+# cover that surface.
 @dataclass(frozen=True, slots=True)
 class _NteGameSpec(LauncherGameSpec):
-    """NTE-only game spec; currently a single title per region.
-
-    The Steam scope carries the canonical Steam App ID so the application
-    layer can register a Steam shortcut without inventing metadata.
-    """
+    """NTE-only game spec; currently a single CN title."""
 
 
 NTE_CN_GAMES = (
@@ -64,16 +59,6 @@ NTE_CN_GAMES = (
         title="异环",
         executable_names=("NevernessToEverness.exe", "NTE.exe", "NTEClient.exe"),
         compatibility_status=CompatibilityStatus.EXPERIMENTAL,
-    ),
-)
-
-NTE_STEAM_GAMES = (
-    _NteGameSpec(
-        external_game_id="nte_steam",
-        title="NTE: Neverness to Everness",
-        executable_names=("NevernessToEverness.exe", "NTE.exe", "NTEClient.exe"),
-        compatibility_status=CompatibilityStatus.EXPERIMENTAL,
-        native_steam_app_id=NTE_STEAM_APP_ID,
     ),
 )
 
@@ -101,28 +86,17 @@ NTE_CN = LauncherSpec(
     games=NTE_CN_GAMES,
 )
 
-NTE_STEAM = LauncherSpec(
-    provider_id="nte_steam",
-    display_name="provider.nte_steam",
-    region="global",
-    official_page="https://store.steampowered.com/app/4508340/NTE_Neverness_to_Everness",
-    # The Steam scope never downloads a launcher; Valve owns it.
-    installer_url="",
-    installer_hosts=(),
-    prefix_name="nte-steam",
-    executable_candidates=(),
-    games=NTE_STEAM_GAMES,
-)
-
 
 class NteProvider(HoYoPlayProvider):
-    """Single-title provider shared by the isolated CN and Steam scopes.
+    """Single-title provider for NTE (Neverness to Everness).
 
     Inherits installer import/download metadata handling from
-    ``HoYoPlayProvider`` so the same SHA-256 + MZ validation applies to NTE
-    launchers. Channel/profile entry points inherited from HoYoPlay are
-    overridden to reject NTE explicitly; NTE never participates in the
-    official/Bilibili workflow.
+    ``HoYoPlayProvider`` so the same SHA-256 + MZ validation applies to
+    the wanmei-hosted NTE launcher. Channel/profile entry points
+    inherited from HoYoPlay are overridden to reject NTE explicitly;
+    NTE never participates in the official/Bilibili workflow. Steam
+    covers the international release under App ID 4508340 on its own,
+    so GameBridge does not register a parallel nte_steam scope.
     """
 
     def __init__(
@@ -137,19 +111,16 @@ class NteProvider(HoYoPlayProvider):
         return ProviderCapabilities(
             account_connection=True,
             public_catalog=True,
-            # Only the CN scope is auto-installed. The Steam scope lets Steam
-            # manage the client; the provider does not host an installer.
             official_installer=bool(self.spec.installer_url),
             update=True,
             local_launch=True,
         )
 
     # ------------------------------------------------------------------
-    # Steam scope: there is no launcher to discover, no installer to host.
-    # ``launcher_executable`` and ``game_installation`` must return None so
-    # the application layer can route the user to ``steam://rungameid/4508340``
-    # instead of inventing a fake launch path.
-    # ------------------------------------------------------------------
+    # NTE has no Steam scope; Steam covers the international release
+    # directly. ``launcher_executable`` and ``game_installation`` must
+    # return None when the wanmei launcher has not yet been imported so
+    # the application layer does not invent a launch path.
 
     def launcher_executable(self) -> Path | None:
         if not self.spec.executable_candidates:
@@ -374,9 +345,7 @@ class NteProvider(HoYoPlayProvider):
 
 __all__ = [
     "NTE_CN",
-    "NTE_STEAM",
     "NteProvider",
-    "NTE_STEAM_APP_ID",
     "NTE_CN_INSTALLER_URL",
     "NTE_INSTALLER_HOSTS",
 ]

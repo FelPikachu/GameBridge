@@ -1,9 +1,10 @@
-"""Tests for the NTE (Neverness to Everness) provider.
+"""Tests for the NTE (Neverness to Everness) CN provider.
 
-These tests mirror the isolation guarantees of the HoYoPlay provider without
-exercising any miHoYo-only concepts (Bilibili/official channel switching,
-PCGameSDK downloads, HYP API). The CN scope owns its own launcher; the Steam
-scope must never be confused with the CN scope even though both are NTE.
+The international release is owned by Steam under App ID 4508340 and
+never enters GameBridge, so these tests focus on the wanmei-hosted CN
+scope. They mirror the isolation guarantees of the HoYoPlay provider
+without exercising any miHoYo-only concepts (Bilibili/official channel
+switching, PCGameSDK downloads, HYP API).
 """
 
 from __future__ import annotations
@@ -17,10 +18,8 @@ from pathlib import Path
 import pytest
 
 from gamebridge.models import GameReference
-from gamebridge.providers import hoyoplay
-from gamebridge.providers.nte import NTE_CN, NTE_STEAM, NteProvider
+from gamebridge.providers.nte import NTE_CN, NteProvider
 
-NTE_STEAM_APP_ID = 4508340
 NTE_CN_LAUNCHER_SHA256 = (
     "ee41f95ed54c8ec02237e073028c321ae0660703121fbe8b2f6006068918bf94"
 )
@@ -43,48 +42,56 @@ def _cn_provider(tmp_path: Path) -> NteProvider:
     )
 
 
-def _steam_provider(tmp_path: Path) -> NteProvider:
-    return NteProvider(
-        tmp_path / "providers" / "nte-steam",
-        tmp_path / "compatibility",
-        NTE_STEAM,
-    )
-
-
 # ---------------------------------------------------------------------------
-# Isolation: CN and Steam never share data, prefix, or Steam App ID.
+# Provider shape: one CN scope only; no nte_steam parallel scope.
 # ---------------------------------------------------------------------------
 
 
+def test_nte_module_exports_only_cn_scope():
+    """The NTE provider must never expose a Steam-side scope. Steam App ID
+    4508340 is already managed by Steam's own library card; registering a
+    duplicate GameBridge scope would create conflicting shortcut rows."""
+    import gamebridge.providers.nte as nte_module
+
+    forbidden = ("NTE_STEAM", "NTE_STEAM_APP_ID", "NTE_STEAM_GAMES")
+    for name in forbidden:
+        assert not hasattr(nte_module, name), (
+            f"NTE module must not export {name}: Steam owns App ID 4508340"
+        )
+
+    assert NTE_CN.provider_id == "nte_cn"
+    assert NTE_CN.region == "cn"
+    assert NTE_CN.games
+    for game in NTE_CN.games:
+        assert game.compatibility_status.value == "experimental"
+        assert game.native_steam_app_id is None
+
+
+def test_provider_init_starts_in_not_installed_state(tmp_path):
+    provider = _cn_provider(tmp_path)
+    assert provider.provider_id == "nte_cn"
+    assert provider.data_directory == tmp_path / "providers" / "nte-cn"
+    assert provider.prefix_directory == tmp_path / "compatibility" / "nte-cn"
+    assert provider.compatibility_directory == tmp_path / "compatibility"
+
+
 @pytest.mark.asyncio
-async def test_cn_and_steam_providers_are_fully_isolated(tmp_path):
-    cn = _cn_provider(tmp_path)
-    steam = _steam_provider(tmp_path)
-
-    assert cn.provider_id == "nte_cn"
-    assert steam.provider_id == "nte_steam"
-    assert cn.data_directory != steam.data_directory
-    assert cn.prefix_directory == tmp_path / "compatibility" / "nte-cn"
-    assert steam.prefix_directory == tmp_path / "compatibility" / "nte-steam"
-    assert cn.prefix_directory != steam.prefix_directory
-
-    cn_status = await cn.connection_status()
-    steam_status = await steam.connection_status()
-    assert cn_status["state"] == "not_installed"
-    assert cn_status["officialPage"] == "https://yh.wanmei.com/"
-    assert steam_status["state"] == "not_installed"
+async def test_connection_status_reports_not_installed_until_launcher_present(tmp_path):
+    provider = _cn_provider(tmp_path)
+    status = await provider.connection_status()
+    assert status["state"] == "not_installed"
+    assert status["action"] == "download_installer"
+    assert status["region"] == "cn"
+    assert status["officialPage"] == "https://yh.wanmei.com/"
 
 
 @pytest.mark.asyncio
-async def test_steam_provider_only_advertises_steam_app_id_4508340(tmp_path):
-    steam = _steam_provider(tmp_path)
-    games = list(await steam.library())
+async def test_library_returns_only_cn_entry(tmp_path):
+    provider = _cn_provider(tmp_path)
+    games = list(await provider.library())
     assert len(games) == 1
-    spec_game = NTE_STEAM.games[0]
-    assert spec_game.native_steam_app_id == NTE_STEAM_APP_ID
-
-    cn_specs = NTE_CN.games
-    assert all(game.native_steam_app_id != NTE_STEAM_APP_ID for game in cn_specs)
+    assert games[0].provider_id == "nte_cn"
+    assert games[0].region == "cn"
 
 
 # ---------------------------------------------------------------------------
@@ -111,8 +118,6 @@ def test_nte_provider_blocks_bilibili_channel_switching(tmp_path):
         with pytest.raises((NotImplementedError, ValueError)):
             method(*args)
 
-    # channel_selection_status / selected_channel are read-only and may stay
-    # available, but must not expose a Bilibili choice for NTE.
     status = cn.channel_selection_status()
     assert status["current"] == "official"
 
@@ -124,9 +129,6 @@ def test_nte_provider_blocks_bilibili_channel_switching(tmp_path):
         assert not hasattr(nte_module, constant), (
             f"NTE module must not import miHoYo's {constant}"
         )
-
-    for game in NTE_CN.games:
-        assert game.compatibility_status.value == "experimental"
 
 
 def test_nte_spec_has_no_bilibili_sdk_metadata_hosts(tmp_path):
@@ -272,7 +274,7 @@ def test_download_installer_rejects_off_host_redirect(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# launcher resolution: file present vs. absent vs. wrong Steam App ID.
+# launcher resolution: file present vs. absent.
 # ---------------------------------------------------------------------------
 
 
@@ -313,36 +315,6 @@ async def test_resolve_launch_uses_dwproton_runtime(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Steam scope: no auto-download, App ID stays attached to the game record.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_steam_provider_advertises_steam_app_id_even_when_not_installed(tmp_path):
-    steam = _steam_provider(tmp_path)
-    games = {game.external_game_id: game for game in await steam.library()}
-    assert "nte_steam" in games
-    spec_game = NTE_STEAM.games[0]
-    assert spec_game.native_steam_app_id == NTE_STEAM_APP_ID
-    status = await steam.connection_status()
-    assert status["state"] == "not_installed"
-    assert status["region"] == "global"
-
-
-def test_steam_provider_has_no_installer_to_download(tmp_path):
-    """The Steam scope is owned by Valve; the provider must not expose
-    a launcher download path or pretend to host a launcher installer."""
-    steam = _steam_provider(tmp_path)
-    assert steam.spec.installer_url == ""
-    assert steam.spec.installer_hosts == ()
-    expected_installer = (
-        steam.data_directory / "installers" / "official-launcher-installer.exe"
-    )
-    assert steam.managed_installer == expected_installer
-    assert not steam.managed_installer.exists()
-
-
-# ---------------------------------------------------------------------------
 # Discover-adjacent stub never claims a discovery before a real launcher exe
 # is found; tests must not silently invent data.
 # ---------------------------------------------------------------------------
@@ -362,47 +334,6 @@ def test_discover_adjacent_installations_is_empty_until_launcher_present(tmp_pat
     stray.parent.mkdir(parents=True, exist_ok=True)
     stray.write_bytes(b"MZ")
     assert cn.discover_adjacent_installations() == {}
-
-
-# ---------------------------------------------------------------------------
-# Application API registration keeps the two scopes in separate data dirs.
-# ---------------------------------------------------------------------------
-
-
-def test_application_registers_two_isolated_nte_instances(tmp_path, monkeypatch):
-    """Smoke test: registering both NTE scopes must yield distinct providers
-    with separate data dirs, mirroring the Hoyoplay wiring in application.start."""
-    from gamebridge.providers import NteProvider as _NteProvider
-
-    registered: dict[str, _NteProvider] = {}
-
-    class _Registry:
-        def register(self, provider):
-            registered[provider.provider_id] = provider
-
-        def get(self, provider_id):
-            return registered[provider_id]
-
-    monkeypatch.setattr(hoyoplay, "MIHOYO_CN", hoyoplay.MIHOYO_CN)
-    monkeypatch.setattr(hoyoplay, "HOYOPLAY_GLOBAL", hoyoplay.HOYOPLAY_GLOBAL)
-
-    registry = _Registry()
-    registry.register(
-        _NteProvider(
-            tmp_path / "providers" / "nte-cn", tmp_path / "compatibility", NTE_CN
-        )
-    )
-    registry.register(
-        _NteProvider(
-            tmp_path / "providers" / "nte-steam",
-            tmp_path / "compatibility",
-            NTE_STEAM,
-        )
-    )
-
-    assert set(registered) == {"nte_cn", "nte_steam"}
-    assert registered["nte_cn"].data_directory != registered["nte_steam"].data_directory
-    assert registered["nte_cn"].prefix_directory != registered["nte_steam"].prefix_directory
 
 
 # ---------------------------------------------------------------------------

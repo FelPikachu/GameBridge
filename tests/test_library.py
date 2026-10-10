@@ -313,7 +313,7 @@ async def test_dashboard_seeds_public_catalog_without_claiming_ownership(tmp_pat
     dashboard = await application.dashboard()
     page = application.list_games("", 0, 20)
 
-    assert dashboard["gameCount"] == 10
+    assert dashboard["gameCount"] == 9
     provider_counts = {
         provider["id"]: provider["gameCount"] for provider in dashboard["providers"]
     }
@@ -322,9 +322,8 @@ async def test_dashboard_seeds_public_catalog_without_claiming_ownership(tmp_pat
         "mihoyo_cn": 4,
         "hoyoplay_global": 4,
         "nte_cn": 1,
-        "nte_steam": 1,
     }
-    assert page["total"] == 10
+    assert page["total"] == 9
     genshin = next(item for item in page["items"] if item["id"] == "mihoyo_cn:hk4e_cn")
     assert genshin["title"] == "原神"
     assert genshin["compatibility_status"] == "experimental"
@@ -332,15 +331,9 @@ async def test_dashboard_seeds_public_catalog_without_claiming_ownership(tmp_pat
     assert details["installed"] is False
     assert details["launchable"] is False
     assert details["official_client_installed"] is False
-    # NTE Steam scope has no launcher.exe; it is the only entry that surfaces
-    # in the Steam library even before its installer arrives because Steam
-    # itself owns the download. The CN scope stays hidden until the launcher
-    # is imported.
+    # NTE has no Steam scope; only the CN entry exists, and it stays hidden
+    # from the Steam library until the wanmei launcher is imported.
     steam_library = application.steam_library_games()
-    nte_steam = next(
-        (game for game in steam_library if game["id"] == "nte_steam:nte_steam"), None
-    )
-    assert nte_steam is not None
     assert all(game["id"] != "nte_cn:nte_cn" for game in steam_library)
     assert all(not game["id"].startswith("mihoyo_cn") for game in steam_library)
     assert all(not game["id"].startswith("hoyoplay_global") for game in steam_library)
@@ -451,7 +444,7 @@ async def test_dashboard_does_not_wait_for_community_artwork(tmp_path, monkeypat
     dashboard = await application.dashboard()
 
     assert dashboard["status"] == "ready"
-    assert dashboard["gameCount"] == 10
+    assert dashboard["gameCount"] == 9
 
 
 @pytest.mark.asyncio

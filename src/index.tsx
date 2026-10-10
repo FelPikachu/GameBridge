@@ -856,7 +856,8 @@ function applyIntegratedManagementItems(menuItems: any[], appId: number): void {
   const game = managedShortcutForApp(appId);
   if (!game) return;
   const isOfficialLauncherGame = game.provider_id === "mihoyo_cn"
-    || game.provider_id === "hoyoplay_global";
+    || game.provider_id === "hoyoplay_global"
+    || game.provider_id === "nte_cn";
   // HoYoPlay owns its game files. Hide Steam's generic remove-shortcut action
   // so it cannot be mistaken for the official launcher's uninstall workflow.
   let insertionIndex = removeIndex;
@@ -1513,7 +1514,9 @@ function NativeEpicInstallSection({ appId }: { appId: number }) {
     const steamDocument = markerRef.current?.ownerDocument;
     if (!steamDocument?.body) return;
     const active = Boolean(job && !["completed", "cancelled", "failed_retryable", "failed_permanent"].includes(job.state));
-    const isOfficialLauncherGame = game.provider_id === "mihoyo_cn" || game.provider_id === "hoyoplay_global";
+    const isOfficialLauncherGame = game.provider_id === "mihoyo_cn"
+      || game.provider_id === "hoyoplay_global"
+      || game.provider_id === "nte_cn";
     const canUninstall = game.installed || active;
     let currentButton: HTMLElement | undefined;
     let originalLabelText: string | undefined;
@@ -3073,7 +3076,8 @@ function GameDetailView({ gameId, onBack }: { gameId: string; onBack: () => void
   };
 
   const isOfficialLauncherGame = game?.provider_id === "mihoyo_cn"
-    || game?.provider_id === "hoyoplay_global";
+    || game?.provider_id === "hoyoplay_global"
+    || game?.provider_id === "nte_cn";
   const providerLabel = game ? localizeBackend(game.provider_name) ?? game.provider_name : "";
 
   return (

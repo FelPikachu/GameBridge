@@ -12,6 +12,22 @@ _MIHOYO_LAUNCHER_ID = "jGHBHlcOq1"
 _MIHOYO_IMAGE_HOST = "launcher-webstatic.mihoyo.com"
 _IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp")
 
+# TapTap-hosted app icon for NTE (Neverness to Everness), captured 2026-10-10
+# from the public TapTap CDN. Used as a hardcoded artwork source because NTE
+# does not publish launcher-advertised artwork via the miHoYo HYP API and
+# SteamGridDB community artwork for the wanmei launcher is not stable.
+_NTE_CN_TAPTAP_ICON = (
+    "https://img-tc.tapimg.com/market/images/"
+    "ec0bd50c4a0bafa60cde8d0f3775ee84.png/_tap_appicon.jpg"
+)
+_NTE_CN_ARTWORK: dict[str, str] = {
+    "capsule": _NTE_CN_TAPTAP_ICON,
+    "hero": _NTE_CN_TAPTAP_ICON,
+    "header": _NTE_CN_TAPTAP_ICON,
+    "logo": _NTE_CN_TAPTAP_ICON,
+    "icon": _NTE_CN_TAPTAP_ICON,
+}
+
 
 class OfficialLauncherArtworkResolver:
     """Resolve public artwork advertised by an official launcher endpoint."""
@@ -21,6 +37,13 @@ class OfficialLauncherArtworkResolver:
         self._cache_lock = Lock()
 
     def cached(self, provider_id: str, external_game_id: str) -> dict[str, str] | None:
+        # NTE has a stable TapTap-hosted icon. Return it directly so the
+        # Steam library and detail views always have a fallback before they
+        # touch the on-disk cache or the network. Only the single canonical
+        # ``nte_cn`` title is hardcoded; any other external_game_id falls
+        # through to the persistent cache to avoid silently reusing the icon.
+        if provider_id == "nte_cn" and external_game_id == "nte_cn":
+            return dict(_NTE_CN_ARTWORK)
         value = self._read_cache().get(f"{provider_id}:{external_game_id}")
         if not isinstance(value, dict) or not self._valid_image_url(value.get("capsule")):
             return None

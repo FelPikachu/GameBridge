@@ -33,8 +33,6 @@ from gamebridge.providers.hoyoplay import (  # noqa: E402, I001
 )
 from gamebridge.providers.nte import (  # noqa: E402, I001
     NTE_CN,
-    NTE_STEAM,
-    NTE_STEAM_APP_ID,
     NteProvider,
 )
 from gamebridge.storage import (  # noqa: E402, I001
@@ -645,47 +643,22 @@ def _hoyoplay_wine_prefix(
 
 
 def _launch_nte(arguments: argparse.Namespace) -> int:
-    """Launch an NTE scope.
+    """Launch the NTE CN scope.
 
-    NTE has no miHoYo channel/profile concept; the CN scope launches the
+    NTE has no miHoYo channel/profile concept. The CN scope launches the
     wanmei-hosted launcher under UMU + DWProton just like the mihoyo CN
-    path. The Steam scope hands the entire session to Valve: GameBridge
-    does not own a launcher.exe for ``nte_steam`` so any "launch game"
-    request resolves to ``steam steam://rungameid/4508340``.
+    path. The international release lives on Steam under App ID 4508340
+    and never enters this helper.
     """
     root_data = Path.home() / "homebrew" / "data" / "GameBridge" / "data"
     compatibility = CompatibilityManager(root_data / "compatibility")
-    spec, data_name = (NTE_CN, "nte-cn") if arguments.provider in {"nte", "nte_cn"} else (
-        NTE_STEAM,
-        "nte-steam",
-    )
     provider = NteProvider(
-        root_data / "providers" / data_name,
+        root_data / "providers" / "nte-cn",
         root_data / "compatibility",
-        spec,
+        NTE_CN,
     )
     log_directory = root_data / "compatibility" / "logs"
     log_directory.mkdir(parents=True, exist_ok=True)
-
-    if arguments.provider == "nte_steam":
-        steam = shutil.which("steam")
-        if steam is None:
-            _write_log(log_directory, "nte_steam: steam binary not found")
-            return 3
-        log_path = log_directory / f"nte_steam-{arguments.game_id}.log"
-        with log_path.open("ab") as log_stream:
-            result = subprocess.run(  # noqa: S603 -- argv is constant
-                [steam, f"steam://rungameid/{NTE_STEAM_APP_ID}"],
-                env=os.environ.copy(),
-                stdout=log_stream,
-                stderr=subprocess.STDOUT,
-                check=False,
-            )
-        _write_log(
-            log_directory,
-            f"exit nte_steam:{arguments.game_id} {result.returncode}",
-        )
-        return result.returncode
 
     executable = provider.launcher_executable()
     if executable is None:
@@ -977,7 +950,7 @@ def main() -> int:
             )
         _write_log(log_directory, f"exit {arguments.provider}:{arguments.game_id} {result.returncode}")
         return result.returncode
-    if arguments.provider in {"nte", "nte_cn", "nte_steam"}:
+    if arguments.provider in {"nte", "nte_cn"}:
         return _launch_nte(arguments)
     if arguments.provider != "epic":
         return 2

@@ -38,7 +38,6 @@ from .providers import (
     HOYOPLAY_GLOBAL,
     MIHOYO_CN,
     NTE_CN,
-    NTE_STEAM,
     EpicProvider,
     HoYoPlayProvider,
     NteProvider,
@@ -97,22 +96,16 @@ class GameBridgeApplication:
                 HOYOPLAY_GLOBAL,
             )
         )
-        # NTE: CN scope owns the wanmei-hosted launcher; Steam scope owns App
-        # ID 4508340 and never hosts an installer. Both scopes keep their
-        # data directory, prefix, and installation metadata strictly separate
-        # from each other and from the mihoyo_cn/hoyoplay_global providers.
+        # NTE (Neverness to Everness): the wanmei-hosted CN launcher is the
+        # only NTE surface GameBridge manages. The international release is
+        # distributed by Steam under App ID 4508340 and lives entirely on
+        # the Steam client's own library card; GameBridge never registers a
+        # parallel ``nte_steam`` scope.
         self.providers.register(
             NteProvider(
                 self.data_directory / "providers" / "nte-cn",
                 compatibility_root,
                 NTE_CN,
-            )
-        )
-        self.providers.register(
-            NteProvider(
-                self.data_directory / "providers" / "nte-steam",
-                compatibility_root,
-                NTE_STEAM,
             )
         )
         self.epic_installs = EpicInstallManager(epic, self.jobs)
@@ -408,13 +401,12 @@ class GameBridgeApplication:
         )
 
     async def prepare_nte_game_runtime(self, game_id: str) -> dict[str, str]:
-        """Ensure DWProton 11.0-11 is ready for the requested NTE scope.
+        """Ensure DWProton 11.0-11 is ready for the NTE CN scope.
 
-        The Steam scope (``nte_steam``) and the CN scope (``nte_cn``) share
-        one runtime; the launcher exe and game body live in different
-        directories but always boot through UMU + DWProton.
+        The international release is distributed by Steam and does not
+        enter this path; only ``nte_cn`` needs on-demand runtime prep.
         """
-        if game_id not in {"nte_cn", "nte_steam"}:
+        if game_id != "nte_cn":
             raise ValueError("compatibility.unsupported_nte_game")
         await self.prepare_compatibility()
         return await asyncio.to_thread(
@@ -513,12 +505,8 @@ class GameBridgeApplication:
             )
             return await provider.connection_status()
         if isinstance(provider, NteProvider):
-            # NTE Steam scope (App ID 4508340) has no launcher.exe; the only
-            # way to "launch the client" is to ask Steam to bring up its
-            # store/install flow. The CN scope goes through UMU + DWProton
-            # like HoYoPlay once the launcher has been imported.
-            if provider_id == "nte_steam":
-                return self._launch_nte_steam_client()
+            # NTE has only the CN scope; the international release is owned
+            # by Steam under App ID 4508340 and never enters this path.
             return await self._launch_nte_cn_client(provider)
         raise ValueError("provider.client_launch_unsupported")
 
@@ -566,35 +554,6 @@ class GameBridgeApplication:
             "runtime": runtime_name,
             "prefixPath": os.fspath(provider.prefix_directory),
             "logPath": os.fspath(log_path),
-        }
-
-    def _launch_nte_steam_client(self) -> dict[str, object]:
-        """Hand off to Steam for the NTE Steam scope.
-
-        GameBridge does not own a launcher.exe in the nte_steam prefix. The
-        only way to surface the install dialog is to launch Steam itself,
-        which is what the Steam shortcut already does. We open Steam's
-        library view so the user can pick "NTE: Neverness to Everness" and
-        trigger the native install/download flow.
-        """
-        steam = shutil.which("steam")
-        if steam is None:
-            raise FileNotFoundError("nte_steam.steam_binary_missing")
-        from .providers.nte import NTE_STEAM_APP_ID
-
-        asyncio.create_task(
-            asyncio.create_subprocess_exec(  # noqa: S603 -- argv is constant
-                steam,
-                f"steam://rungameid/{NTE_STEAM_APP_ID}",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        )
-        return {
-            "state": "steam_handoff",
-            "appId": NTE_STEAM_APP_ID,
-            "action": "open_steam",
         }
 
     def import_provider_installer(
@@ -871,11 +830,11 @@ class GameBridgeApplication:
             if isinstance(provider, HoYoPlayProvider):
                 details.update(provider.game_installation(row["external_game_id"]))
                 details["steam_shortcut"] = self._hoyoplay_steam_shortcut(details)
-        elif row["provider_id"] in {"nte_cn", "nte_steam"}:
+        elif row["provider_id"] == "nte_cn":
             provider = self.providers.get(row["provider_id"])
             if isinstance(provider, NteProvider):
                 details.update(provider.game_installation(row["external_game_id"]))
-                details["steam_shortcut"] = self._nte_steam_shortcut(details)
+                details["steam_shortcut"] = self._nte_shortcut(details)
         community_artwork = self.steamgriddb.cached(
             str(row["provider_id"]), str(row["external_game_id"])
         )
@@ -980,16 +939,17 @@ class GameBridgeApplication:
                     continue
                 game.update(provider.game_installation(str(game["external_game_id"])))
                 game["steam_shortcut"] = self._hoyoplay_steam_shortcut(game)
-            elif game["provider_id"] in {"nte_cn", "nte_steam"}:
+            elif game["provider_id"] == "nte_cn":
                 provider = self.providers.get(str(game["provider_id"]))
                 if not isinstance(provider, NteProvider):
                     continue
-                # NTE Steam scope has no launcher; surface it as long as the
-                # catalog entry exists so the user can pick "open in Steam".
-                if provider.provider_id == "nte_cn" and provider.launcher_executable() is None:
+                # NTE CN stays hidden until the wanmei launcher is imported;
+                # the international release lives on Steam's own library
+                # card and never enters this list.
+                if provider.launcher_executable() is None:
                     continue
                 game.update(provider.game_installation(str(game["external_game_id"])))
-                game["steam_shortcut"] = self._nte_steam_shortcut(game)
+                game["steam_shortcut"] = self._nte_shortcut(game)
             elif game["provider_id"] == "epic":
                 game.update(self._epic_game_metadata(str(game["external_game_id"])))
                 game.update(self._epic_installation(str(game["external_game_id"])))
@@ -1220,70 +1180,45 @@ class GameBridgeApplication:
             "compatibility_tool": runtime_name,
         }
 
-    def _nte_steam_shortcut(
+    def _nte_shortcut(
         self, game: dict[str, object]
     ) -> dict[str, str] | None:
-        """Return Steam shortcut profiles for NTE.
+        """Return the Steam shortcut profile for the NTE CN scope.
 
-        CN scope: hand off to UMU + DWProton through the standalone
-        launcher.py, mirroring the mihoyo "gamebridge_router" pattern. We
-        avoid the direct_executable path because the wanmei launcher exe
-        name is not pinned until a Steam Deck install confirms it.
-
-        Steam scope: the only valid shortcut points Steam at the real App
-        ID 4508340. GameBridge never copies the Steam client into its own
-        prefix; it relies on Valve to handle download, integrity, and
-        updates.
+        NTE has only the CN scope: hand off to UMU + DWProton through the
+        standalone ``launcher.py``, mirroring the mihoyo
+        ``gamebridge_router`` pattern. We avoid the ``direct_executable``
+        path because the wanmei launcher exe name is not pinned until a
+        Steam Deck install confirms it. The international release lives
+        on Steam's own library card under App ID 4508340 and never
+        enters this helper.
         """
         provider_id = str(game.get("provider_id"))
         external_game_id = str(game.get("external_game_id"))
-        if provider_id == "nte_cn" and external_game_id == "nte_cn":
-            dwproton = [
-                (name, path)
-                for name, path in self.compatibility.proton_layers()
-                if name.casefold().startswith("dwproton-")
-            ]
-            if not dwproton:
-                return None
+        if provider_id != "nte_cn" or external_game_id != "nte_cn":
+            return None
+        dwproton = [
+            (name, path)
+            for name, path in self.compatibility.proton_layers()
+            if name.casefold().startswith("dwproton-")
+        ]
+        if not dwproton:
+            return None
 
-            def version_key(item: tuple[str, Path]) -> tuple[int, ...]:
-                return tuple(int(value) for value in re.findall(r"\d+", item[0]))
+        def version_key(item: tuple[str, Path]) -> tuple[int, ...]:
+            return tuple(int(value) for value in re.findall(r"\d+", item[0]))
 
-            runtime_name, _runtime_path = max(dwproton, key=version_key)
-            return {
-                "mode": "gamebridge_router",
-                "executable": "/usr/bin/python3",
-                "start_directory": "/home/deck/homebrew/plugins/GameBridge",
-                "launch_options": (
-                    '"gamebridge/launcher.py" --provider nte '
-                    f'--game-id "{external_game_id}"'
-                ),
-                "compatibility_tool": runtime_name,
-            }
-        if provider_id == "nte_steam" and external_game_id == "nte_steam":
-            from .providers.nte import NTE_STEAM_APP_ID
-
-            dwproton = [
-                (name, path)
-                for name, path in self.compatibility.proton_layers()
-                if name.casefold().startswith("dwproton-")
-            ]
-            if not dwproton:
-                return None
-
-            def version_key(item: tuple[str, Path]) -> tuple[int, ...]:
-                return tuple(int(value) for value in re.findall(r"\d+", item[0]))
-
-            runtime_name, _runtime_path = max(dwproton, key=version_key)
-            return {
-                "mode": "steam_native",
-                "appId": NTE_STEAM_APP_ID,
-                "executable": f"steam://rungameid/{NTE_STEAM_APP_ID}",
-                "start_directory": "/home/deck/.local/share/Steam",
-                "launch_options": "",
-                "compatibility_tool": runtime_name,
-            }
-        return None
+        runtime_name, _runtime_path = max(dwproton, key=version_key)
+        return {
+            "mode": "gamebridge_router",
+            "executable": "/usr/bin/python3",
+            "start_directory": "/home/deck/homebrew/plugins/GameBridge",
+            "launch_options": (
+                '"gamebridge/launcher.py" --provider nte '
+                f'--game-id "{external_game_id}"'
+            ),
+            "compatibility_tool": runtime_name,
+        }
 
     async def refresh_official_artwork_catalog(self) -> None:
         """Warm official public artwork before returning native library cards."""
