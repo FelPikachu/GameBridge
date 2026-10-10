@@ -9,7 +9,7 @@ import {
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { FaArrowUpRightFromSquare, FaBridge, FaFolderOpen, FaPlay } from "react-icons/fa6";
 import { LuChevronDown, LuDownload, LuRefreshCw, LuUpload } from "react-icons/lu";
-import { EPIC_GAMES_LOGO, MIHOYO_LAUNCHER_LOGO } from "./brand-assets";
+import { EPIC_GAMES_LOGO, MIHOYO_LAUNCHER_LOGO, NTE_LAUNCHER_LOGO } from "./brand-assets";
 import { localizeBackend, steamT, t } from "./i18n";
 
 type ProviderSummary = {
@@ -1341,10 +1341,14 @@ function injectProviderTabs(result: unknown): unknown {
   const tabs = (tuple ? result[0] : result) as any[];
   if (!tabs.some((tab) => tab?.id === "AllGames")) return result;
   const template = tabs.find((tab) => tab?.id === "AllGames");
-  const nativeTabs = tabs.filter((tab) => tab?.id !== "gamebridge-epic" && tab?.id !== "gamebridge-mihoyo");
+  const nativeTabs = tabs.filter((tab) =>
+    tab?.id !== "gamebridge-epic"
+    && tab?.id !== "gamebridge-mihoyo"
+    && tab?.id !== "gamebridge-nte");
   const epicGames = cachedSteamLibraryGames?.filter((game) => game.provider_id === "epic") ?? [];
   const mihoyoGames = cachedSteamLibraryGames?.filter((game) =>
     game.provider_id === "mihoyo_cn" || game.provider_id === "hoyoplay_global") ?? [];
+  const nteGames = cachedSteamLibraryGames?.filter((game) => game.provider_id === "nte_cn") ?? [];
   const installedProviders = new Set(
     cachedDashboard?.providers
       .filter((provider) => provider.status.state === "installed")
@@ -1369,6 +1373,14 @@ function injectProviderTabs(result: unknown): unknown {
     footer: { ...(template?.footer ?? {}) },
     content: <ProviderSteamLibraryPage providerIds={["mihoyo_cn", "hoyoplay_global"]} />,
     renderTabAddon: () => <ProviderTabAddon count={mihoyoGames.length || 4} />,
+  });
+  if (nteGames.length || installedProviders.has("nte_cn")) providerTabs.push({
+    ...template,
+    title: t("nteCnTabTitle"),
+    id: "gamebridge-nte",
+    footer: { ...(template?.footer ?? {}) },
+    content: <ProviderSteamLibraryPage providerIds={["nte_cn"]} />,
+    renderTabAddon: () => <ProviderTabAddon count={nteGames.length || 1} />,
   });
   const merged = [...nativeTabs, ...providerTabs];
   return tuple ? [merged, ...result.slice(1)] : merged;
@@ -2579,6 +2591,7 @@ function Content() {
             <div style={{ ...DASHBOARD_CARD_STYLE, marginBottom: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 {provider.id === "epic" && <EpicGamesLogo />}
+                {provider.id === "nte_cn" && <NteLogo />}
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontSize: 16, fontWeight: 650 }}>{localizeBackend(provider.name) ?? provider.name}</div>
                   {provider.status.account && <div style={{ marginTop: 2, fontSize: 12, opacity: .55, overflow: "hidden", textOverflow: "ellipsis" }}>{provider.status.account}</div>}
@@ -3329,6 +3342,16 @@ function MiHoYoLogo() {
       width: 40, height: 44, flex: "0 0 auto", display: "grid", placeItems: "center",
     }}>
       <img src={MIHOYO_LAUNCHER_LOGO} alt="" draggable={false} style={{ display: "block", width: 40, height: 40, objectFit: "contain", borderRadius: 9 }} />
+    </div>
+  );
+}
+
+function NteLogo() {
+  return (
+    <div style={{
+      width: 40, height: 44, flex: "0 0 auto", display: "grid", placeItems: "center",
+    }}>
+      <img src={NTE_LAUNCHER_LOGO} alt="" draggable={false} style={{ display: "block", width: 40, height: 40, objectFit: "contain", borderRadius: 9 }} />
     </div>
   );
 }

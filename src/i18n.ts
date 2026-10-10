@@ -70,7 +70,7 @@ const messages = {
     downloadAndInstallOfficial: "Download and install {provider}", downloadingOfficialInstaller: "Downloading the official installer…",
     installOfficialProvider: "Install {provider}",
     mihoyoCn: "miHoYo (China)", hoyoplayGlobal: "HoYoPlay (Global)", hoyoplayNotInstalled: "Official client not installed", hoyoplayInstalledLogin: "Sign in inside the official client",
-    providerNteCn: "NTE", nteNotInstalled: "Official client not installed", nteInstalledLogin: "Sign in inside the official client",
+    providerNteCn: "NTE", nteCnTabTitle: "NTE (China)", nteNotInstalled: "Official client not installed", nteInstalledLogin: "Sign in inside the official client",
     launcherStorageUnavailable: "Launcher storage device is not connected", gameStorageUnavailable: "Game storage device is not connected",
   },
   zh: {
@@ -136,7 +136,7 @@ const messages = {
     downloadAndInstallOfficial: "下载并安装 {provider}", downloadingOfficialInstaller: "正在下载官方安装器…",
     installOfficialProvider: "安装 {provider}",
     mihoyoCn: "米哈游", hoyoplayGlobal: "HoYoPlay（国际服）", hoyoplayNotInstalled: "未安装官方客户端", hoyoplayInstalledLogin: "请在官方客户端内登录",
-    providerNteCn: "异环", nteNotInstalled: "未安装官方客户端", nteInstalledLogin: "请在官方客户端内登录",
+    providerNteCn: "异环", nteCnTabTitle: "异环 国服", nteNotInstalled: "未安装官方客户端", nteInstalledLogin: "请在官方客户端内登录",
     launcherStorageUnavailable: "米哈游启动器所在存储设备未连接", gameStorageUnavailable: "游戏所在存储设备未连接",
   },
   zht: {
