@@ -70,6 +70,8 @@ const messages = {
     downloadAndInstallOfficial: "Download and install {provider}", downloadingOfficialInstaller: "Downloading the official installer…",
     installOfficialProvider: "Install {provider}",
     mihoyoCn: "miHoYo (China)", hoyoplayGlobal: "HoYoPlay (Global)", hoyoplayNotInstalled: "Official client not installed", hoyoplayInstalledLogin: "Sign in inside the official client",
+    providerNteCn: "NTE (China)", providerNteSteam: "NTE (Steam)", nteNotInstalled: "Official client not installed", nteInstalledLogin: "Sign in inside the official client",
+    nteSteamHandOff: "Opening Steam…", nteSteamAppId: "Steam App ID {appId}",
     launcherStorageUnavailable: "Launcher storage device is not connected", gameStorageUnavailable: "Game storage device is not connected",
   },
   zh: {
@@ -135,6 +137,8 @@ const messages = {
     downloadAndInstallOfficial: "下载并安装 {provider}", downloadingOfficialInstaller: "正在下载官方安装器…",
     installOfficialProvider: "安装 {provider}",
     mihoyoCn: "米哈游", hoyoplayGlobal: "HoYoPlay（国际服）", hoyoplayNotInstalled: "未安装官方客户端", hoyoplayInstalledLogin: "请在官方客户端内登录",
+    providerNteCn: "异环（国服）", providerNteSteam: "异环（Steam 国际服）", nteNotInstalled: "未安装官方客户端", nteInstalledLogin: "请在官方客户端内登录",
+    nteSteamHandOff: "正在交给 Steam…", nteSteamAppId: "Steam App ID {appId}",
     launcherStorageUnavailable: "米哈游启动器所在存储设备未连接", gameStorageUnavailable: "游戏所在存储设备未连接",
   },
   zht: {
@@ -277,6 +281,8 @@ const backendMessages: Record<string, LocaleKey> = {
   "epic.tool_missing": "epicToolMissing", "epic.connected": "connected", "epic.login_required": "epicLoginRequired", "epic.login_expired": "epicLoginExpired",
   "provider.mihoyo_cn": "mihoyoCn", "provider.hoyoplay_global": "hoyoplayGlobal", "hoyoplay.not_installed": "hoyoplayNotInstalled", "hoyoplay.installed_login_in_client": "hoyoplayInstalledLogin",
   "hoyoplay.launcher_storage_unavailable": "launcherStorageUnavailable", "hoyoplay.game_storage_unavailable": "gameStorageUnavailable",
+  "provider.nte_cn": "providerNteCn", "provider.nte_steam": "providerNteSteam", "nte.not_installed": "nteNotInstalled", "nte.installed_login_in_client": "nteInstalledLogin",
+  "nte.steam_handoff": "nteSteamHandOff", "nte.steam_app_id": "nteSteamAppId",
   "epic.login_corrupt": "epicLoginCorrupt", "error.invalid_auth_code": "invalidAuthCode", "error.epic_login_failed": "epicLoginFailed",
   "error.epic_uninstall_failed": "epicUninstallFailed", "error.epic_manifest_missing": "epicManifestMissing", "error.invalid_auth_json": "invalidAuthJson",
   "error.invalid_auth_format": "invalidAuthFormat", "provider.local_demo": "localDemo", "install.preparing": "phasePreparing", "install.downloading": "phaseDownloading",

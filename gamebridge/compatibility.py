@@ -133,6 +133,36 @@ class CompatibilityManager:
             return {"version": release.version, "path": os.fspath(target)}
         return self.installer.install_compatibility_tool(release, root)
 
+    def ensure_nte_runtime(self, _game_id: str) -> dict[str, str]:
+        """NTE always uses DWProton regardless of scope.
+
+        The Steam scope (App ID 4508340) lets Steam handle download/integrity
+        checks; the CN scope lets the wanmei launcher drop the game body
+        onto an external drive. Either way DWProton 11.0-11 is the verified
+        runtime; the launcher does not need a separate GE-Proton fork.
+        """
+        release = DWPROTON_RELEASE
+        root = Path.home() / ".local/share/Steam/compatibilitytools.d"
+        target = root / release.version
+        self.installer.set_progress(
+            active=True,
+            component=release.component,
+            phase="checking_runtime",
+            progress=0.14,
+            source=None,
+            downloadedBytes=0,
+            totalBytes=None,
+        )
+        if (target / "proton").is_file():
+            self.installer.set_progress(
+                active=False,
+                component=release.component,
+                phase="complete",
+                progress=1.0,
+            )
+            return {"version": release.version, "path": os.fspath(target)}
+        return self.installer.install_compatibility_tool(release, root)
+
     def refresh_database(self) -> list[dict[str, Any]]:
         request = urllib.request.Request(
             UMU_DATABASE_URL, headers={"User-Agent": "GameBridge/0.18"}

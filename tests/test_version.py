@@ -138,11 +138,13 @@ async def test_dashboard_reports_package_version(tmp_path):
     app.start()
     dashboard = await app.dashboard()
     assert dashboard["version"] == __version__
-    assert dashboard["providerCount"] == 3
+    assert dashboard["providerCount"] == 5
     assert [provider["id"] for provider in dashboard["providers"]] == [
         "epic",
         "mihoyo_cn",
         "hoyoplay_global",
+        "nte_cn",
+        "nte_steam",
     ]
 
 

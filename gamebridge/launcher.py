@@ -22,12 +22,20 @@ if os.fspath(PLUGIN_ROOT) not in sys.path:
 
 from gamebridge.compatibility import CompatibilityManager  # noqa: E402, I001
 from gamebridge.cloud_saves import EpicCloudSaveManager  # noqa: E402, I001
+from gamebridge.models import RuntimeProfile  # noqa: E402, I001
 from gamebridge.play_history import merge_history_store  # noqa: E402, I001
+from gamebridge.runtime import UmuRuntime  # noqa: E402, I001
 from gamebridge.providers.hoyoplay import (  # noqa: E402, I001
     HOYOPLAY_GLOBAL,
     MIHOYO_CN,
     HoYoPlayProvider,
     LauncherSpec,
+)
+from gamebridge.providers.nte import (  # noqa: E402, I001
+    NTE_CN,
+    NTE_STEAM,
+    NTE_STEAM_APP_ID,
+    NteProvider,
 )
 from gamebridge.storage import (  # noqa: E402, I001
     StorageRoot,
@@ -636,6 +644,129 @@ def _hoyoplay_wine_prefix(
     return launch_prefix
 
 
+def _launch_nte(arguments: argparse.Namespace) -> int:
+    """Launch an NTE scope.
+
+    NTE has no miHoYo channel/profile concept; the CN scope launches the
+    wanmei-hosted launcher under UMU + DWProton just like the mihoyo CN
+    path. The Steam scope hands the entire session to Valve: GameBridge
+    does not own a launcher.exe for ``nte_steam`` so any "launch game"
+    request resolves to ``steam steam://rungameid/4508340``.
+    """
+    root_data = Path.home() / "homebrew" / "data" / "GameBridge" / "data"
+    compatibility = CompatibilityManager(root_data / "compatibility")
+    spec, data_name = (NTE_CN, "nte-cn") if arguments.provider in {"nte", "nte_cn"} else (
+        NTE_STEAM,
+        "nte-steam",
+    )
+    provider = NteProvider(
+        root_data / "providers" / data_name,
+        root_data / "compatibility",
+        spec,
+    )
+    log_directory = root_data / "compatibility" / "logs"
+    log_directory.mkdir(parents=True, exist_ok=True)
+
+    if arguments.provider == "nte_steam":
+        steam = shutil.which("steam")
+        if steam is None:
+            _write_log(log_directory, "nte_steam: steam binary not found")
+            return 3
+        log_path = log_directory / f"nte_steam-{arguments.game_id}.log"
+        with log_path.open("ab") as log_stream:
+            result = subprocess.run(  # noqa: S603 -- argv is constant
+                [steam, f"steam://rungameid/{NTE_STEAM_APP_ID}"],
+                env=os.environ.copy(),
+                stdout=log_stream,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        _write_log(
+            log_directory,
+            f"exit nte_steam:{arguments.game_id} {result.returncode}",
+        )
+        return result.returncode
+
+    executable = provider.launcher_executable()
+    if executable is None:
+        executable = provider.managed_installer
+    if executable is None or not executable.is_file():
+        _write_log(log_directory, f"nte_cn: launcher/installer missing for {arguments.game_id}")
+        return 3
+    try:
+        if not compatibility.umu_executable.is_file():
+            compatibility.prepare()
+        runtime_name, runtime_path = _newest_dwproton(compatibility) or (
+            "DWProton",
+            Path.home() / ".local/share/Steam/compatibilitytools.d" / "dwproton-11.0-11-x86_64",
+        )
+    except (OSError, ValueError, RuntimeError):
+        return 4
+    if executable == provider.managed_installer:
+        # Boot the wanmei launcher itself to download the game body. The
+        # launcher stores the game body on the user's external drive via
+        # its own UI; GameBridge does not need to know the path yet.
+        ensure_wine_storage_drive(provider.prefix_directory, executable)
+        profile = RuntimeProfile(
+            game_id=f"{provider.provider_id}:launcher",
+            prefix_path=os.fspath(provider.prefix_directory),
+            executable=os.fspath(executable),
+            runtime_version=os.fspath(runtime_path),
+            game_id_umu="umu-default",
+            store="none",
+            environment={"UMU_LOG": "1"},
+        )
+        command = UmuRuntime(os.fspath(compatibility.umu_executable)).build(profile)
+        environment = os.environ.copy()
+        environment.update(command.environment)
+        log_path = log_directory / "nte_cn-launcher.log"
+        with log_path.open("ab") as log_stream:
+            result = subprocess.run(  # noqa: S603 -- validated argv from UmuRuntime.build
+                command.argv,
+                cwd=executable.parent,
+                env=environment,
+                stdout=log_stream,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        _write_log(log_directory, f"exit nte_cn:launcher {result.returncode}")
+        return result.returncode
+
+    ensure_wine_storage_drive(provider.prefix_directory, executable)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "WINEPREFIX": os.fspath(provider.prefix_directory),
+            "GAMEID": "umu-default",
+            "UMU_ID": "umu-default",
+            "STORE": "none",
+            "PROTONPATH": os.fspath(runtime_path),
+            "UMU_LOG": "1",
+        }
+    )
+    log_path = log_directory / f"nte_cn-{arguments.game_id}.log"
+    _write_log(
+        log_directory,
+        f"launch nte_cn:{arguments.game_id} with {runtime_name}",
+    )
+    with log_path.open("ab") as log_stream:
+        command = _official_client_command(
+            compatibility.umu_executable,
+            executable,
+            inhibit_sleep=False,
+        )
+        result = subprocess.run(  # noqa: S603 -- argv is constant
+            command,
+            cwd=executable.parent,
+            env=environment,
+            stdout=log_stream,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+    _write_log(log_directory, f"exit nte_cn:{arguments.game_id} {result.returncode}")
+    return result.returncode
+
+
 def main() -> int:
     user_home = Path.home()
     parser = argparse.ArgumentParser()
@@ -846,6 +977,8 @@ def main() -> int:
             )
         _write_log(log_directory, f"exit {arguments.provider}:{arguments.game_id} {result.returncode}")
         return result.returncode
+    if arguments.provider in {"nte", "nte_cn", "nte_steam"}:
+        return _launch_nte(arguments)
     if arguments.provider != "epic":
         return 2
     if not re.fullmatch(r"[a-z]{2}(?:-[A-Z]{2})?", arguments.language):
